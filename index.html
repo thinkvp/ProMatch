@@ -48,6 +48,10 @@
                         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"/><path d="M13 6.5H6.5a3.5 3.5 0 000 7H9"/></svg>
                     </button>
                     <span class="bar-spacer"></span>
+                    <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: vectorscope and luma, source vs target (S)">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12"/><circle cx="6.4" cy="6.6" r="1.1" class="fill"/></svg>
+                        Scopes
+                    </button>
                     <div class="seg" id="view-mode" role="group" aria-label="Target preview">
                         <button data-mode="original" aria-pressed="true" title="Target as shot">Before</button>
                         <button data-mode="split" aria-pressed="false" title="Left half as shot, right half matched">Split</button>
@@ -107,6 +111,29 @@
                         </div>
                     </section>
                 </div>
+                <section class="scopes" id="scopes" hidden>
+                    <div class="scopes-bar">
+                        <span class="scope-legend"><i class="lg-src"></i>Source <i class="lg-tgt"></i>Target, matched <span id="lg-orig-wrap" hidden><i class="lg-orig"></i>Target, original</span></span>
+                        <label class="toggle small-toggle" title="Also show the target as shot (grey), to see what the match changed"><input type="checkbox" class="switch" id="scope-original"><span>Original</span></label>
+                        <span class="bar-spacer"></span>
+                        <div class="seg" id="scope-area" role="group" aria-label="Scope area">
+                            <button data-area="frame" aria-pressed="true" title="Every pixel of both frames">Whole frame</button>
+                            <button data-area="matched" aria-pressed="false" title="Only the areas feature matching found in both frames (face, picture, shirt…), so different framing doesn't skew the comparison">Matched areas</button>
+                            <button data-area="point" aria-pressed="false" title="Only the selected point's circle in each frame">Selected point</button>
+                        </div>
+                    </div>
+                    <div class="scopes-body">
+                        <figure class="scope">
+                            <canvas id="vscope"></canvas>
+                            <figcaption>Vectorscope <button id="vscope-zoom" class="link" title="Zoom the vectorscope">2×</button></figcaption>
+                        </figure>
+                        <figure class="scope wide">
+                            <canvas id="lscope"></canvas>
+                            <figcaption>Luma <span class="small">ticks: 5% · 50% · 95%</span></figcaption>
+                        </figure>
+                        <div class="scope-readout" id="scope-readout"></div>
+                    </div>
+                </section>
                 <p id="hint" class="hint" aria-live="polite"></p>
             </div>
 
@@ -127,14 +154,15 @@
 
                 <section class="tab-panel" data-panel="settings" role="tabpanel" hidden>
                     <div class="controls settings">
-                        <label class="row">
-                            <span>Model</span>
+                        <label class="row" title="The overall correction applied to every colour. Exposure and contrast each also have their own switch below.">
+                            <span>Overall model</span>
                             <select id="opt-model">
-                                <option value="matrix">Exposure + balance + colour matrix</option>
-                                <option value="balance">Exposure + white balance</option>
-                                <option value="exposure">Exposure only</option>
+                                <option value="exposure" id="opt-model-base">Exposure &amp; contrast only</option>
+                                <option value="balance">+ white balance</option>
+                                <option value="matrix">+ white balance + colour matrix</option>
                             </select>
                         </label>
+                        <p class="field-help">Per-colour fix corrects each point on top of this, so with many points or a wide Colour range the two colour models look alike. <b><span id="model-base-name">Exposure &amp; contrast only</span></b> never changes hue or saturation: its per-colour fixes move brightness only.</p>
                         <label class="toggle"><input type="checkbox" class="switch" id="opt-autoexp"><span>Match exposure</span></label>
                         <label class="toggle" title="Cameras with different picture profiles differ more in the shadows than the highlights. Needs points at different brightnesses."><input type="checkbox" class="switch" id="opt-contrast"><span>Match contrast</span></label>
                         <label class="toggle" title="Ease highlights into white instead of clipping them when the match brightens the image."><input type="checkbox" class="switch" id="opt-rolloff"><span>Roll off highlights</span></label>

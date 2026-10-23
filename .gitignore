@@ -3,3 +3,6 @@ dist/
 *.log
 fixtures/*.png
 vendor/opencv.js
+native/sdk/
+native/out/
+native/build/

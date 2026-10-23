@@ -7,6 +7,8 @@ import { type Analysis, analyse } from '../core/analysis.ts'
 import { suggestPairs } from '../core/auto.ts'
 import { type Vec3, toHex } from '../core/color.ts'
 import { matchFeatures } from '../core/features.ts'
+import { findPlanes } from '../core/homography.ts'
+import { convexHull, insidePolygon, lumaStats, pixelIndices, strideFor, vectorscope } from '../core/scopes.ts'
 import { suggestFromMatches } from '../core/geo-auto.ts'
 import { applyLutToPixels, bakeLut, toCube } from '../core/lut.ts'
 import {
@@ -28,6 +30,7 @@ import * as host from './host.ts'
 import { clearErrorBadge, log } from './log.ts'
 import * as node from './node.ts'
 import { loadOpenCv } from './opencv.ts'
+import { ScopesView } from './scopes-view.ts'
 
 type Role = 'source' | 'target'
 const ROLES: Role[] = ['source', 'target']
@@ -50,6 +53,14 @@ interface Pair {
 }
 
 type ShowMode = 'both' | 'source' | 'target'
+type ScopeArea = 'frame' | 'matched' | 'point'
+
+/** Areas feature matching found in both frames, as hulls in full-res pixels. */
+interface MatchedAreas {
+  key: string
+  source: Array<Array<[number, number]>>
+  target: Array<Array<[number, number]>>
+}
 
 /** A pair's report plus its tested (held-out) error — see crossValidate. */
 type RowReport = PairReport & {
@@ -177,6 +188,15 @@ export class App {
   /** A drag is one undo step, not one per mouse move. */
   private dragUndo: { id: number; role: Role } | null = null
   private show: ShowMode = 'both'
+  private scopes!: ScopesView
+  private scopesOn = false
+  private scopeArea: ScopeArea = 'frame'
+  /** Also draw the target as shot (grey) on the scopes. */
+  private scopeOriginal = false
+  /** Matched-area hulls for the current frame pair; 'pending' while OpenCV works. */
+  private areas: MatchedAreas | 'pending' | 'failed' | null = null
+  /** The matched target preview's pixels (same size as Frame.small). */
+  private previewData: ImageData | null = null
   private markersVisible = true
 
   async init(): Promise<void> {
@@ -184,6 +204,7 @@ export class App {
       source: this.makeView('source'),
       target: this.makeView('target'),
     }
+    this.scopes = new ScopesView($('#vscope') as HTMLCanvasElement, $('#lscope') as HTMLCanvasElement, $('#scope-readout'))
     this.bindControls()
     this.bindKeys()
     this.applyLayout()
@@ -232,6 +253,7 @@ export class App {
         this.selectedId = id
         this.renderMarkers()
         this.renderPoints()
+        if (this.scopeArea === 'point') this.renderScopes()
       },
       remove: (id) => this.removePair(id),
     })
@@ -260,6 +282,27 @@ export class App {
       b.addEventListener('click', () => this.setShow(b.dataset.show as ShowMode))
     }
     $('#toggle-markers').addEventListener('click', () => this.setMarkersVisible(!this.markersVisible))
+    $('#toggle-scopes').addEventListener('click', () => this.setScopes(!this.scopesOn))
+    for (const b of document.querySelectorAll<HTMLButtonElement>('#scope-area button')) {
+      b.addEventListener('click', () => {
+        this.scopeArea = b.dataset.area as ScopeArea
+        for (const o of document.querySelectorAll<HTMLButtonElement>('#scope-area button')) o.setAttribute('aria-pressed', String(o === b))
+        this.renderScopes()
+      })
+    }
+    const zoomScope = () => {
+      this.scopes.zoom = this.scopes.zoom === 1 ? 2 : this.scopes.zoom === 2 ? 4 : 1
+      $('#vscope-zoom').textContent = `${this.scopes.zoom}×`
+      this.renderScopes()
+    }
+    $('#vscope-zoom').addEventListener('click', zoomScope)
+    const orig = $('#scope-original') as HTMLInputElement
+    orig.addEventListener('change', () => {
+      this.scopeOriginal = orig.checked
+      $('#lg-orig-wrap').hidden = !orig.checked
+      this.renderScopes()
+    })
+    $('#vscope').addEventListener('click', zoomScope)
     $('#auto-points').addEventListener('click', () => this.runAuto())
     $('#clear-auto').addEventListener('click', () => {
       this.remember()
@@ -284,6 +327,7 @@ export class App {
     const contrast = $('#opt-contrast') as HTMLInputElement
     contrast.addEventListener('change', () => {
       this.opts.matchContrast = contrast.checked
+      this.labelModels()
       this.scheduleUpdate()
     })
     const roll = $('#opt-rolloff') as HTMLInputElement
@@ -411,11 +455,22 @@ export class App {
     if (open) clearErrorBadge()
   }
 
+  /**
+   * The first model is "exposure and contrast" only while contrast matching
+   * is on; say exactly what it does. The others read as additions to it.
+   */
+  private labelModels(): void {
+    const base = this.opts.matchContrast ? 'Exposure & contrast only' : 'Exposure only'
+    $('#opt-model-base').textContent = base
+    $('#model-base-name').textContent = base
+  }
+
   /** Push current state into the form controls (after restore). */
   private syncControls(): void {
     ;($('#opt-model') as HTMLSelectElement).value = this.opts.globalModel
     ;($('#opt-autoexp') as HTMLInputElement).checked = this.opts.autoExposure
     ;($('#opt-contrast') as HTMLInputElement).checked = this.opts.matchContrast
+    this.labelModels()
     ;($('#opt-rolloff') as HTMLInputElement).checked = this.opts.highlightRolloff
     for (const s of SLIDERS) {
       const input = $(`.slider input[data-key="${s.key}"]`) as HTMLInputElement
@@ -447,6 +502,10 @@ export class App {
         if (e.key.toLowerCase() === 'y' || e.shiftKey) this.redo()
         else this.undo()
         e.preventDefault()
+        return
+      }
+      if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        this.setScopes(!this.scopesOn)
         return
       }
       if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -529,6 +588,7 @@ export class App {
     this.applyLayout() // the frame's aspect ratio decides side-by-side vs stacked
     const el = this.frameEl(role)
     el.classList.add('loaded')
+    this.areas = null
     $('[data-meta]', el).textContent = label
     $('[data-meta]', el).title = path ?? label
     $('[data-empty]', el).hidden = true
@@ -683,6 +743,122 @@ export class App {
     }
   }
 
+  private setScopes(on: boolean): void {
+    this.scopesOn = on
+    $('#scopes').hidden = !on
+    $('#toggle-scopes').setAttribute('aria-pressed', String(on))
+    this.applyLayout()
+    this.renderScopes()
+  }
+
+  /**
+   * Source vs MATCHED target on the scopes, over the chosen area, plus the
+   * target as shot when "Original" is on. Deliberately independent of the
+   * image's Before / Split / After view, so the key always describes what is
+   * drawn.
+   */
+  private renderScopes(): void {
+    if (!this.scopesOn) return
+    const src = this.frames.source
+    const tgt = this.frames.target
+    if (!src || !tgt) {
+      this.scopes.clear('Capture both frames to compare them.')
+      return
+    }
+    // The matched preview is rebuilt on every update; it can lag a frame
+    // behind a freshly loaded target, in which case wait for the next one.
+    const tPx = this.previewData
+    if (!tPx || tPx.width !== tgt.small.width || tPx.height !== tgt.small.height) {
+      this.scopes.clear('Preparing the matched target…')
+      return
+    }
+    const oPx = tgt.small
+    const sPx = src.small
+    const ks = sPx.width / src.width
+    const kt = tPx.width / tgt.width
+    let sKeep: ((x: number, y: number) => boolean) | undefined
+    let tKeep: ((x: number, y: number) => boolean) | undefined
+    let note = ''
+    if (this.scopeArea === 'matched') {
+      const areas = this.matchedAreas(src, tgt)
+      if (areas === 'pending') {
+        this.scopes.clear('Finding matched areas…')
+        return
+      }
+      if (!areas) note = 'No matched areas found — whole frame shown.'
+      else {
+        const sh = areas.source.map((h) => h.map(([x, y]) => [x * ks, y * ks] as [number, number]))
+        const th = areas.target.map((h) => h.map(([x, y]) => [x * kt, y * kt] as [number, number]))
+        sKeep = (x, y) => sh.some((h) => insidePolygon(h, x, y))
+        tKeep = (x, y) => th.some((h) => insidePolygon(h, x, y))
+      }
+    } else if (this.scopeArea === 'point') {
+      const p = this.pairs.find((q) => q.id === this.selectedId && q.source && q.target) ?? this.pairs.find((q) => q.source && q.target)
+      if (!p) {
+        this.scopes.clear('Select a point to scope just its circles.')
+        return
+      }
+      const disc = (pt: Pt, r: number, k: number) => {
+        const cx = pt.x * k
+        const cy = pt.y * k
+        const rr = Math.max(4, r * k)
+        return (x: number, y: number) => (x - cx) ** 2 + (y - cy) ** 2 <= rr * rr
+      }
+      sKeep = disc(p.source!, this.radiusOf('source', p.source!), ks)
+      tKeep = disc(p.target!, this.radiusOf('target', p.target!), kt)
+    }
+    // Small areas: sample every pixel; whole frames: ~60k of them.
+    const sStep = this.scopeArea === 'point' ? 1 : strideFor(sPx.width, sPx.height)
+    const tStep = this.scopeArea === 'point' ? 1 : strideFor(tPx.width, tPx.height)
+    const si = pixelIndices(sPx.width, sPx.height, sStep, sKeep)
+    // Same pixels for matched and original: the preview is the original, matched.
+    const ti = pixelIndices(tPx.width, tPx.height, tStep, tKeep)
+    if (!si.length || !ti.length) {
+      this.scopes.clear('Nothing to show for this area.')
+      return
+    }
+    const size = this.scopes.vectorSize()
+    this.scopes.render(
+      { vector: vectorscope(sPx.data, si, size, this.scopes.zoom), luma: lumaStats(sPx.data, si) },
+      { vector: vectorscope(tPx.data, ti, size, this.scopes.zoom), luma: lumaStats(tPx.data, ti) },
+      this.scopeOriginal ? { vector: vectorscope(oPx.data, ti, size, this.scopes.zoom), luma: lumaStats(oPx.data, ti) } : null,
+    )
+    if (note) $('#scope-readout').insertAdjacentHTML('beforeend', `<p class="scope-empty">${note}</p>`)
+  }
+
+  /**
+   * Hulls of the planes feature matching finds in both frames (face,
+   * picture, shirt…). Computed once per frame pair, on first use; until then
+   * returns 'pending' and re-renders the scopes when done.
+   */
+  private matchedAreas(src: Frame, tgt: Frame): MatchedAreas | 'pending' | null {
+    const key = `${src.label}|${src.width}|${tgt.label}|${tgt.width}`
+    if (this.areas && this.areas !== 'pending' && this.areas !== 'failed' && this.areas.key === key) return this.areas
+    if (this.areas === 'pending') return 'pending'
+    if (this.areas === 'failed') return null
+    this.areas = 'pending'
+    ;(async () => {
+      try {
+        await new Promise((r) => setTimeout(r, 20)) // let "Finding…" paint
+        const cv = await loadOpenCv()
+        const planes = findPlanes(matchFeatures(cv, src.pixels, tgt.pixels), 0.004 * tgt.width)
+        this.areas = planes.length
+          ? {
+              key,
+              source: planes.map((pl) => convexHull(pl.members.map((m) => m.a))),
+              target: planes.map((pl) => convexHull(pl.members.map((m) => m.b))),
+            }
+          : 'failed'
+        if (!planes.length) log('Scopes: no matched areas found between the frames.', 'warn')
+      } catch (e) {
+        this.areas = 'failed'
+        log(`Scopes: matched areas unavailable (${(e as Error).message}).`, 'warn')
+      }
+      this.renderScopes()
+    })()
+    return 'pending'
+  }
+
   private setViewMode(mode: ViewMode): void {
     this.views.target.mode = mode
     for (const b of document.querySelectorAll<HTMLButtonElement>('#view-mode button')) {
@@ -818,6 +994,7 @@ export class App {
     this.renderSummary()
     this.renderHint()
     this.renderProgress()
+    this.renderScopes()
     this.scheduleSave()
   }
 
@@ -825,6 +1002,7 @@ export class App {
     const lut = bakeLut(PREVIEW_LUT_SIZE, (c) => applyModel(this.model, c))
     const img = new ImageData(new Uint8ClampedArray(tgt.small.data), tgt.small.width, tgt.small.height)
     applyLutToPixels(lut, img.data)
+    this.previewData = img
     if (this.preview.width !== img.width || this.preview.height !== img.height) {
       this.preview = canvasOf(img.width, img.height)
     }
@@ -927,6 +1105,7 @@ export class App {
         this.selectedId = p.id
         this.renderMarkers()
         this.renderPoints()
+        if (this.scopeArea === 'point') this.renderScopes()
       })
       list.appendChild(li)
     })

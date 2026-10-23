@@ -30,7 +30,7 @@ The panel was driven over its DevTools port with `node scripts/cdp.mjs "<expr>"`
 | P3 | PARTIAL | A second run captured 111_3933.MXF and C0773.MP4 at the **same** playhead (00:01:36:07), and the clip-under-playhead label named each one correctly. How the view was switched between them (multicam angle or track visibility) was not recorded. |
 | P4 | **PASS** | "Added Lumetri Color to 1 clip(s)" on C0773.MP4. Tested on one clip only; a track with gaps is not covered. |
 | P5 | PARTIAL, open | See below. |
-| P6 | _not run_ | |
+| P6 | **PASS** | Same frame: Premiere's Input LUT result matches the panel's software prediction to 0.27/255 (S-Log3 media, gamma 2.2 project). See below. |
 
 **P5 detail (first run, broad spike — tried every param matching /LUT\|Look/).** On a fresh Lumetri:
 
@@ -48,6 +48,63 @@ So the **Input LUT / Look dropdowns are numeric popups** and refuse a path. Five
 blob params accept any string and read it back. **Not known: whether any of them changes the
 picture.** Reading back the same string only proves the store, not the effect. Writing a path into
 the blob params may also have left that Lumetri instance in an odd state.
+
+**API survey, 26.3.2 (read-only, via `reflect`).**
+- `app.project.applyLumetriPreset(name: string) → boolean`, `getAllLumetriPresetsList()` and
+  `getLumetriPresetsForFolderList(category)` cover only Premiere's 331 built-in Look presets
+  (categories like "SpeedLooks" and "Filmstocks", from `Lumetri/LUTs/Creative/*.itx`). They do
+  not see `.cube` files in our folder or in `Common/LUTs`, so they can't apply a ProMatch LUT
+  without installing it into Program Files and restarting.
+- ProjectItem has `getInputLUTID` / `getEmbeddedLUTID` but **no setter**, so a clip-level
+  Input LUT is out.
+- `Sequence.renderVideoFrameAtTime` and `renderVideoFrameAtTimeWithColorSpace` exist. They're an
+  official alternative to QE `exportFramePNG` for capture.
+- The source clip reports colour space **Sony S-Log3/S-Gamut3.Cine** (scene-referred). Whether
+  Lumetri applies a LUT before or after colour management's conversion to display decides
+  whether our display-referred LUT is correct (P6). Unverified.
+
+**LUTAsset alone: no effect (2026-10-24).** C0773.MP4 was selected in PROMATCH-TEST at
+00:03:30:03. The test captured the frame, added a fresh Lumetri, set only `#128 LUTAsset` to a
+test `.cube` (accepted and read back), then captured again. **The two captures are identical to
+the pixel.** Applying the same LUT to the before frame in software changes it by 30/255 on
+average, so the LUT is clearly not being applied. A dump afterwards shows why: both
+`Input LUT` dropdowns (#6, #7) still read `0` (None), and they refuse strings. Next step: Browse…
+a LUT by hand once, then dump to see which dropdown index and `LUTAsset` format Premiere itself
+writes, and set those two from script.
+
+**Hand-set LUT vs script (2026-10-24, same clip, all captures at 00:03:30:03).**
+- Browse… by hand sets `#6 Input LUT` to `1` and leaves `LUTAsset` empty. The real state is the
+  XML in `#0 Blob`: UTF-8 packed two bytes per UTF-16 code unit, starting `<Lumetri>`. It holds
+  `<shader name="LUT"> <__Embed>"1"</__Embed> <LUT>"C:\…ile.cube"</LUT>` plus an
+  `<embeddedlut><hash>…</hash><filename>…</filename>`. `#122 Embedded LUTs` holds that hash,
+  the size and an `ITX3` tag. Premiere embeds its own converted copy, so the hash isn't the
+  file's MD5. The LUT shader is followed by "Gamma 2.4 to Linear", so the LUT sees display
+  gamma values.
+- **Script cannot change what Lumetri renders.** Every write is accepted and reads back, but
+  the capture is pixel-identical to the hand-set state each time. Tried: `#6` 1 → 0 → 1;
+  `LUTAsset` = a greyscale test LUT with `#6` at 1; and the full XML rewritten to the grey LUT
+  (path, `__Embed` 0, no hash), including after a playhead nudge to force a re-render.
+- **Gotcha: the evalScript bridge silently drops some code units**, e.g. U+2061, which is what
+  "a" + space packs into. The first blob writes were corrupted that way ("Gamma 2.4" became
+  "Gamm2.4"). Sending the code units as hex and rebuilding with `String.fromCharCode` inside
+  ExtendScript round-trips exactly. The decisive grey test was redone that way: still no
+  change. The test Lumetri's XML was restored byte-identical afterwards.
+- **P6 PASS: the LUT is applied in the encoding the engine assumes.** Same frame, before vs
+  hand-set LUT: Premiere's output matches our software application of the same `.cube` to the
+  captured frame to **0.27/255 on average, 0% of values off by more than 3**, flat across
+  brightness. That holds with S-Log3 source media under Premiere colour management in a
+  gamma 2.2 project. A first attempt suggested a highlight mismatch; it was the playhead
+  having moved between captures.
+- Consequence for one-click: script can add Lumetri but not give it a LUT. Options are a native
+  effect (AE SDK) whose numeric parameter script *can* set, or the current Browse… step.
+  Re-exporting under the same name does not update a Lumetri that already uses it, because
+  the LUT is embedded; it has to be picked again.
+
+**Native-effect risk 1 PASS (2026-10-24): script-set parameters re-render.** On C0773 at
+00:03:30:03, `Opacity.properties[0].setValue(50, true)` changed the capture by 17.6/255 on
+average (it blended with the camera on the track below). `setValue(100, true)` restored it
+pixel-identically. So ordinary effect parameters are fully scriptable; only Lumetri's private
+LUT state isn't. The one-click native-effect plan (`native/PLAN.md`) stands.
 
 **Next run (spike tooling now supports it):**
 1. Delete the Lumetri the first spike wrote into. Add a fresh one, then set the LUT **by hand**

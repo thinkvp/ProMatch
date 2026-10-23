@@ -346,7 +346,12 @@ function fitLocal(model: MatchModel, u: Usable[], opts: MatchOptions): void {
   const sigma = Math.max(opts.colourRange, 0.01)
   const centres = u.map((p) => linearToOklab(globalLin(model, p.t)))
   const wanted = u.map((p) => linearToOklab(p.s))
-  const resid = wanted.map((s, i) => [s[0] - centres[i][0], s[1] - centres[i][1], s[2] - centres[i][2]])
+  // "Exposure (& contrast) only" promises to leave colour alone, so its
+  // per-colour fixes may only move lightness. Without this the local layer
+  // quietly matched hue and saturation anyway (on a real interview it
+  // doubled the target's relative saturation).
+  const toneOnly = opts.globalModel === 'exposure'
+  const resid = wanted.map((s, i) => [s[0] - centres[i][0], toneOnly ? 0 : s[1] - centres[i][1], toneOnly ? 0 : s[2] - centres[i][2]])
   const n = u.length
   const meanW = u.reduce((a, p) => a + p.w, 0) / n
   const mu = Math.max(opts.smoothing, 1e-3)

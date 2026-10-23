@@ -14,6 +14,7 @@ import { DEFAULT_OPTIONS, type MatchOptions, type PairInput, applyModel, crossVa
 import { bakeLut, parseCube, sampleLut, toCube } from '../src/core/lut.ts'
 import { sampleDisc } from '../src/core/sample.ts'
 import { analyse } from '../src/core/analysis.ts'
+import { convexHull, insidePolygon, lumaStats, pixelIndices, vectorscope, ycbcr } from '../src/core/scopes.ts'
 import { suggestPairs } from '../src/core/auto.ts'
 import { suggestFromMatches } from '../src/core/geo-auto.ts'
 import { type Correspondence, type Homography, type Pt, applyH, findPlanes, ransacHomography } from '../src/core/homography.ts'
@@ -358,6 +359,43 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   const flagged = disagreeing(pairs)
   check('tested error flags the odd pair out', flagged.length === 1 && flagged[0] === 8, `flagged ${flagged.map((i) => i + 1).join(',') || 'none'}; its tested error ${tested[8].toFixed(1)}`)
   check('  ...and needs 3 pairs to say anything', crossValidate(pairs.slice(0, 2)) === null)
+}
+
+{
+  // Scopes: the maths a colourist would sanity-check.
+  const [, cbR, crR] = ycbcr(255, 0, 0)
+  check('vectorscope: red sits upper-left (Cb < 0, Cr = +0.5)', cbR < -0.1 && Math.abs(crR - 0.5) < 1e-9)
+  const [yG, cbG, crG] = ycbcr(128, 128, 128)
+  check('  ...and grey sits dead centre', Math.abs(cbG) < 1e-9 && Math.abs(crG) < 1e-9 && Math.abs(yG - 128 / 255) < 1e-9)
+  // Luma ramp 0..255 across 256 pixels: percentiles land where they should.
+  const ramp = new Uint8ClampedArray(256 * 4)
+  for (let i = 0; i < 256; i++) ramp.set([i, i, i, 255], i * 4)
+  const st = lumaStats(ramp, pixelIndices(256, 1, 1))
+  check('luma percentiles on a ramp', Math.abs(st.p05 - 5) <= 1 && Math.abs(st.p50 - 50) <= 1 && Math.abs(st.p95 - 95) <= 1, `${st.p05} / ${st.p50} / ${st.p95}`)
+  const v = vectorscope(ramp, pixelIndices(256, 1, 1), 64, 2)
+  check('  ...and a grey ramp is one dot in the vectorscope', v.counts[32 * 64 + 32] === 256)
+  const hull = convexHull([[0, 0], [10, 0], [10, 10], [0, 10], [5, 5], [2, 8]])
+  check('convex hull drops interior points', hull.length === 4 && insidePolygon(hull, 5, 5) && !insidePolygon(hull, 11, 5))
+}
+
+{
+  // "Exposure only" must not change colour, even with the per-colour layer at 100%:
+  // the camera here differs in white balance and reds as well as exposure.
+  const cam = (c: Vec3) => cameraB(c)
+  const train = sceneColours(10)
+  const model = fitMatch(pairsFrom(train, cam), { ...DEFAULT_OPTIONS, globalModel: 'exposure', localStrength: 1 })
+  let worst = 0
+  for (const c of sceneColours(200)) {
+    const t = cam(c)
+    const [L0, a0, b0] = encodedToOklab(t)
+    const [L1, a1, b1] = encodedToOklab(applyModel(model, t))
+    if (L0 < 0.15 || L1 < 0.15 || L1 > 0.95) continue
+    // Hue angle and chroma relative to lightness: what "colour" means once brightness changes.
+    const dh = Math.abs(Math.atan2(b1, a1) - Math.atan2(b0, a0)) * (Math.hypot(a0, b0) > 0.02 ? 1 : 0)
+    const dr = Math.abs(Math.hypot(a1, b1) / L1 - Math.hypot(a0, b0) / L0)
+    worst = Math.max(worst, dr + Math.min(dh, 2 * Math.PI - dh) * 0.1)
+  }
+  check('Exposure-only model leaves hue and saturation alone (per-colour at 100%)', worst < 0.02, `worst colour change ${worst.toFixed(4)}`)
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed')

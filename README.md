@@ -68,6 +68,20 @@ how close the match gets at that spot *without* it. Click again to switch it bac
 can be undone with **Ctrl+Z** or the ↶ button in the toolbar. **Ctrl+Shift+Z**, **Ctrl+Y** or
 ↷ redoes.
 
+**Scopes** (toolbar button, or **S**) open a strip under the frames, visible from either tab,
+so you can watch it while dragging Settings sliders. They always compare the source (blue)
+with the **matched** target (amber), whatever the image view is set to. Switch on **Original**
+to add the target as shot in grey and see what the match changed.
+- **Vectorscope:** hue and saturation (Rec.709 Cb/Cr), with the skin-tone line and 75% bar
+  targets. Overlap shows as white. Click it to zoom 1× / 2× / 4×.
+- **Luma:** overlaid histograms with 5% / 50% / 95% ticks.
+- **Readout:** shadows, mids, highlights, saturation and hue for Source / Matched (/ Original).
+  Matched values that differ enough from the source to matter are highlighted.
+- **Whole frame / Matched areas / Selected point** choose what is compared. Matched areas uses
+  the planes feature matching finds in both frames (face, picture, shirt), so different framing
+  doesn't skew it. It can show a mismatch the whole frame hides: on the test interview, whole
+  frame mids matched exactly (17 / 17) while the matched areas read 38 / 29.
+
 **Viewing:** scroll to zoom around the cursor; **Space**+drag or middle-drag pans; the %
 badge returns to fit. The eye button, or **H**, hides the points for a clean look.
 
