@@ -1,0 +1,24 @@
+{
+  "name": "promatch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Premiere Pro panel that matches the colour of one camera angle to another from user-picked point pairs, and bakes the result into a .cube LUT.",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "test": "tsx scripts/test.ts",
+    "fixtures": "tsx scripts/make-fixtures.ts",
+    "typecheck": "tsc --noEmit",
+    "link": "node scripts/link.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@techstark/opencv-js": "4.12.0-release.1"
+  }
+}

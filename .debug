@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Remote debugging: with the panel open, browse to http://localhost:8094
+     (ToTheChoppa owns 8088, Interviewed 8090). -->
+<ExtensionList>
+    <Extension Id="com.promatch.panel.main">
+        <HostList>
+            <Host Name="PPRO" Port="8094" />
+        </HostList>
+    </Extension>
+</ExtensionList>

@@ -1,0 +1,4 @@
+{
+  "//": "vendor/ holds plain scripts (opencv.js, CSInterface.js); the project root is type:module, which would make Node load them as ES modules.",
+  "type": "commonjs"
+}

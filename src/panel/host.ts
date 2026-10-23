@@ -1,0 +1,98 @@
+/**
+ * Typed bridge to jsx/host.jsx (same transport as Interviewed: the argument
+ * is JSON-stringified twice so it arrives as a safe JS string literal).
+ *
+ * Outside CEP (the panel opened in a plain browser for UI work) there is no
+ * CSInterface; `available` is false and every call rejects with a clear
+ * message instead of hanging.
+ */
+
+interface CSInterfaceLike {
+  evalScript(script: string, callback: (result: string) => void): void
+  getSystemPath(type: string): string
+}
+
+declare const CSInterface: { new (): CSInterfaceLike } | undefined
+declare const SystemPath: { EXTENSION: string } | undefined
+
+export interface CaptureInfo {
+  timecode: string
+  sequence: string
+  width: number
+  height: number
+  clip: { name: string; track: number; multicam: boolean } | null
+}
+
+export interface SelectedClip {
+  name: string
+  track: number
+  hasLumetri: boolean
+}
+
+export interface ParamValue {
+  type: string
+  value: string
+  length?: number
+  /** First char codes in hex — blob params read back as odd strings. */
+  codes?: string
+}
+
+export interface EffectDump {
+  clip: string
+  components: Array<{ index: number; name: string; matchName: string; props: Array<ParamValue & { index: number; name: string }> }>
+}
+
+export interface LutSpike {
+  clip: string
+  tried: Array<{ index: number; name: string; before: ParamValue; after: ParamValue; error: string | null }>
+}
+
+// CSInterface.js defines its class anywhere; only CEP injects __adobe_cep__.
+const inCep = typeof (window as unknown as { __adobe_cep__?: unknown }).__adobe_cep__ !== 'undefined'
+const cs: CSInterfaceLike | null = inCep && typeof CSInterface === 'function' ? new CSInterface() : null
+
+export const available = cs !== null
+
+function evalRaw(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!cs) {
+      reject(new Error('Not running inside Premiere Pro.'))
+      return
+    }
+    cs.evalScript(script, resolve)
+  })
+}
+
+async function call<T>(fn: string, arg?: unknown): Promise<T> {
+  const script = arg === undefined ? `${fn}()` : `${fn}(${JSON.stringify(JSON.stringify(arg))})`
+  const raw = await evalRaw(script)
+  if (raw === 'EvalScript error.' || raw === undefined) {
+    throw new Error(`${fn}: ExtendScript error (host.jsx failed to load or threw outside its guard)`)
+  }
+  let parsed: { ok: boolean; data?: T; error?: string; line?: number }
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`${fn}: unreadable reply: ${raw.slice(0, 200)}`)
+  }
+  if (!parsed.ok) throw new Error(`${parsed.error}${parsed.line ? ` (host.jsx line ${parsed.line})` : ''}`)
+  return parsed.data as T
+}
+
+/** Load sentinel: if PM_ping is missing, host.jsx did not parse; try once to re-evaluate it. */
+export async function connect(): Promise<{ app: string; version: string; sequence: string | null }> {
+  if (!cs) throw new Error('Not running inside Premiere Pro.')
+  const has = await evalRaw('typeof PM_ping')
+  if (has !== 'function' && typeof SystemPath !== 'undefined') {
+    const ext = cs.getSystemPath(SystemPath.EXTENSION).replace(/\\/g, '/')
+    await evalRaw(`$.evalFile("${ext}/jsx/host.jsx")`)
+  }
+  return call('PM_ping')
+}
+
+export const projectInfo = () => call<{ name: string | null; path: string | null }>('PM_projectInfo')
+export const captureFrame =(path: string) => call<CaptureInfo>('PM_captureFrame', { path })
+export const selection = () => call<SelectedClip[]>('PM_selection')
+export const addLumetri = () => call<{ added: number; failed: string[] }>('PM_addLumetri')
+export const dumpEffects = () => call<EffectDump>('PM_dumpEffects')
+export const trySetLut = (params: string[], value: string | number) => call<LutSpike>('PM_trySetLut', { params, value })

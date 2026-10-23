@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ProMatch</title>
+    <link rel="stylesheet" href="css/panel.css">
+</head>
+<body>
+    <div id="app">
+        <header class="app-header">
+            <div class="brand">
+                <svg class="logo" viewBox="0 0 20 20" aria-hidden="true">
+                    <circle cx="7.5" cy="10" r="5.5" class="logo-a"/>
+                    <circle cx="12.5" cy="10" r="5.5" class="logo-b"/>
+                </svg>
+                <h1>ProMatch</h1>
+            </div>
+            <ol class="progress" id="progress" aria-label="Progress">
+                <li data-step="source"><span class="n">1</span>Source</li>
+                <li data-step="target"><span class="n">2</span>Target</li>
+                <li data-step="points"><span class="n">3</span>Points</li>
+                <li data-step="export"><span class="n">4</span>Export</li>
+            </ol>
+            <span id="status" class="status" role="status"></span>
+        </header>
+
+        <main class="workspace" id="workspace">
+            <div class="viewer">
+                <div class="viewer-bar">
+                    <div class="seg" id="show-mode" role="group" aria-label="Frames shown">
+                        <button data-show="both" aria-pressed="true" title="Show both frames">Both</button>
+                        <button data-show="source" aria-pressed="false" title="Show only the source">Source</button>
+                        <button data-show="target" aria-pressed="false" title="Show only the target — handy while tuning">Target</button>
+                    </div>
+                    <button id="toggle-markers" class="icon-btn toggle-btn" aria-pressed="true" title="Show or hide the points (H)">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path class="strike" d="M2.5 13.5l11-11"/></svg>
+                    </button>
+                    <button id="auto-points" class="quiet auto-btn" title="Suggest point pairs automatically from the colours both frames share. Review them, then add a few of your own on skin.">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.4 3.6 3.6 1.4-3.6 1.4L8 11.5 6.6 7.9 3 6.5l3.6-1.4zM12.5 10.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>
+                        Auto
+                    </button>
+                    <span class="bar-sep" aria-hidden="true"></span>
+                    <button id="undo" class="icon-btn" title="Undo the last point change (Ctrl+Z)" aria-label="Undo" disabled>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5L2.5 6.5l3 3"/><path d="M3 6.5h6.5a3.5 3.5 0 010 7H7"/></svg>
+                    </button>
+                    <button id="redo" class="icon-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"/><path d="M13 6.5H6.5a3.5 3.5 0 000 7H9"/></svg>
+                    </button>
+                    <span class="bar-spacer"></span>
+                    <div class="seg" id="view-mode" role="group" aria-label="Target preview">
+                        <button data-mode="original" aria-pressed="true" title="Target as shot">Before</button>
+                        <button data-mode="split" aria-pressed="false" title="Left half as shot, right half matched">Split</button>
+                        <button data-mode="matched" aria-pressed="false" title="Target with the match applied">After</button>
+                    </div>
+                </div>
+                <div class="frames">
+                    <section class="frame" data-role="source">
+                        <div class="frame-head">
+                            <span class="role">Source</span>
+                            <span class="frame-meta" data-meta>match to this</span>
+                            <div class="frame-actions">
+                                <button class="icon-btn" data-capture title="Capture the Program Monitor frame at the playhead">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
+                                </button>
+                                <button class="icon-btn" data-open title="Open a still image…">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h4.2l1.4 1.6H14v7.4H2z"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="canvas-wrap">
+                            <canvas></canvas>
+                            <div class="empty" data-empty>
+                                <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
+                                <p>Park the playhead on the camera you want to <b>match to</b>.</p>
+                                <div class="empty-actions">
+                                    <button class="primary" data-capture>Capture frame</button>
+                                    <button class="quiet" data-open>Open still…</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="frame" data-role="target">
+                        <div class="frame-head">
+                            <span class="role">Target</span>
+                            <span class="frame-meta" data-meta>fix this</span>
+                            <div class="frame-actions">
+                                <button class="icon-btn" data-capture title="Capture the Program Monitor frame at the playhead">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
+                                </button>
+                                <button class="icon-btn" data-open title="Open a still image…">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h4.2l1.4 1.6H14v7.4H2z"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="canvas-wrap">
+                            <canvas></canvas>
+                            <div class="empty" data-empty>
+                                <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
+                                <p>Switch to the camera you want to <b>fix</b>, ideally at the same moment and without a ProMatch LUT on it.</p>
+                                <div class="empty-actions">
+                                    <button class="primary" data-capture>Capture frame</button>
+                                    <button class="quiet" data-open>Open still…</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+                <p id="hint" class="hint" aria-live="polite"></p>
+            </div>
+
+            <div class="side">
+                <div class="tabs" role="tablist" aria-label="Panels">
+                    <button role="tab" data-tab="points" aria-selected="true">Points <span id="point-count" class="tab-count"></span></button>
+                    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+                </div>
+
+                <section class="tab-panel" data-panel="points" role="tabpanel">
+                    <div id="quality" class="quality" hidden></div>
+                    <div class="points-head" id="points-head" hidden>
+                        <span></span><span>Source</span><span>Target</span><span>Result</span><span class="de-col" title="After = tested: how close the match gets at each point when fitted without it">ΔE before → tested</span><span></span>
+                    </div>
+                    <ol id="points" class="points"></ol>
+                    <div class="points-foot"><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
+                </section>
+
+                <section class="tab-panel" data-panel="settings" role="tabpanel" hidden>
+                    <div class="controls settings">
+                        <label class="row">
+                            <span>Model</span>
+                            <select id="opt-model">
+                                <option value="matrix">Exposure + balance + colour matrix</option>
+                                <option value="balance">Exposure + white balance</option>
+                                <option value="exposure">Exposure only</option>
+                            </select>
+                        </label>
+                        <label class="toggle"><input type="checkbox" class="switch" id="opt-autoexp"><span>Match exposure</span></label>
+                        <label class="toggle" title="Cameras with different picture profiles differ more in the shadows than the highlights. Needs points at different brightnesses."><input type="checkbox" class="switch" id="opt-contrast"><span>Match contrast</span></label>
+                        <label class="toggle" title="Ease highlights into white instead of clipping them when the match brightens the image."><input type="checkbox" class="switch" id="opt-rolloff"><span>Roll off highlights</span></label>
+                        <div id="sliders" class="sliders"></div>
+                        <details class="sub">
+                            <summary>Fine-tune</summary>
+                            <div id="sliders-advanced" class="sliders"></div>
+                        </details>
+                    </div>
+                </section>
+
+                <div id="export-result" class="card export-result" hidden></div>
+
+                <details class="card dev" id="dev-card">
+                    <summary><h2>Developer</h2><span class="count">Ctrl+Shift+D hides</span></summary>
+                    <p class="small">API spikes — record results in <code>spikes/SPIKES.md</code>. Select one clip in the Timeline first. Dumps are saved to <code>%APPDATA%\ProMatch\spikes\</code>.</p>
+                    <div class="controls">
+                        <label class="row" title="Lumetri parameter display names, comma-separated; #N targets parameter index N (see a dump)">
+                            <span>Params to set</span>
+                            <input id="spike-params" type="text" spellcheck="false" value="LUTAsset">
+                        </label>
+                        <label class="row" title="Blank = the last exported LUT's path. A number is sent as a number (for popups like Input LUT).">
+                            <span>Value</span>
+                            <input id="spike-value" type="text" spellcheck="false" placeholder="last exported LUT path">
+                        </label>
+                    </div>
+                    <div class="button-row">
+                        <button id="spike-dump" data-needs-host>Dump effects on selected clip</button>
+                        <button id="spike-setlut" data-needs-host>Set those params</button>
+                    </div>
+                </details>
+
+                <div class="log-drawer">
+                    <button id="log-toggle" class="log-toggle" aria-expanded="false">Log</button>
+                    <pre id="log" class="log" hidden></pre>
+                </div>
+            </div>
+        </main>
+
+        <footer class="action-bar">
+            <input id="lut-name" type="text" spellcheck="false" aria-label="LUT name" title="LUT name (also the file name)">
+            <select id="lut-size" aria-label="LUT size" title="LUT size: 33³ is standard, 65³ is finest, 17³ is smallest">
+                <option value="33">33³</option>
+                <option value="65">65³</option>
+                <option value="17">17³</option>
+            </select>
+            <button id="add-lumetri" class="icon-btn fx" data-needs-host title="Add Lumetri Color to the clips selected in the Timeline">fx</button>
+            <button id="export" class="primary">Export LUT</button>
+        </footer>
+
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/tiff" hidden>
+    </div>
+
+    <script src="vendor/CSInterface.js"></script>
+    <script src="dist/panel.js"></script>
+</body>
+</html>

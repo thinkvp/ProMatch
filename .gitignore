@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.log
+fixtures/*.png
+vendor/opencv.js
