@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { color: #ddd; font: 12px system-ui, sans-serif; padding: 8px; }
+      button { display: block; width: 100%; margin: 4px 0; }
+      h3 { margin: 10px 0 4px; font-size: 12px; }
+      #log { white-space: pre-wrap; font: 11px monospace; margin-top: 8px; }
+      .note { color: #999; }
+    </style>
+  </head>
+  <body>
+    <p class="note">Results go to spikes/uxp/out/results.json. Park the playhead on a clip first.</p>
+    <h3>Panel only (safe in any project)</h3>
+    <button id="t1">1. Export frame at playhead (PNG + BMP)</button>
+    <button id="t2">2. Pixels, ProMatch engine, WebAssembly</button>
+    <button id="t2b">2b. Load OpenCV (up to 30 s)</button>
+    <button id="t2c">2c. WebView (full browser in the panel)</button>
+    <button id="t2d">2d. WebView page sources (plugin, file, https)</button>
+    <h3>Changes the selected clip (scratch project only)</h3>
+    <button id="t3">3. Add the ProMatch effect to the selected clip</button>
+    <button id="t4">4. Set its LUT (colour invert) and Match ID, export again</button>
+    <button id="t5">5. Read the LUT back (after save + reopen too)</button>
+    <button id="undo">Remove the ProMatch effect the spike added</button>
+    <div id="log"></div>
+    <script src="core.js"></script>
+    <script src="index.js"></script>
+  </body>
+</html>

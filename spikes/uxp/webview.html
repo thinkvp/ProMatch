@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+  <body style="background:#222;color:#ddd;font:11px sans-serif">
+    WebView test page
+    <script>
+      // Full browser canvas inside the WebView? Report back to the plugin.
+      const r = {}
+      try {
+        const c = document.createElement('canvas')
+        c.width = 4
+        c.height = 4
+        const ctx = c.getContext('2d')
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(64).fill(200), 4, 4), 0, 0)
+        r.canvasRoundTrip = ctx.getImageData(0, 0, 4, 4).data[0] === 200
+      } catch (e) {
+        r.canvasError = String(e)
+      }
+      r.wasm = typeof WebAssembly === 'object'
+      r.userAgent = navigator.userAgent
+      try {
+        window.uxpHost.postMessage(JSON.stringify(r))
+      } catch (e) {
+        document.body.textContent = 'no uxpHost: ' + e
+      }
+    </script>
+  </body>
+</html>

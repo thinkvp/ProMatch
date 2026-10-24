@@ -6,3 +6,7 @@ vendor/opencv.js
 native/sdk/
 native/out/
 native/build/
+spikes/uxp/out/
+spikes/uxp/vendor/
+spikes/uxp/core.js
+spikes/uxp/lut-invert.txt

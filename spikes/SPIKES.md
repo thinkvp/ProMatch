@@ -260,3 +260,105 @@ an arbitrary-data parameter "LUT" (no UI, can't be keyframed), and Revision was 
 ### Premiere Pro 25.x (2025)
 
 _Not yet run._
+
+## UXP spikes (U1–U5)
+
+Can a UXP panel do what the CEP panel does? Adobe made UXP GA in Premiere 25.6. It will stop
+accepting new CEP submissions in Dec 2027, disable CEP by default in Dec 2028 and remove it in
+Dec 2029. The spike panel is in `spikes/uxp/` (build its extras with `node spikes/uxp/build.mjs`).
+Load it with the UXP Developer Tools (**Add Plugin** → `spikes/uxp/manifest.json` → **Load**), then
+open it from **Window → UXP Plugins**. Each button writes `spikes/uxp/out/results.json`.
+
+| ID | Question | Replaces |
+| --- | --- | --- |
+| U1 | `Exporter.exportSequenceFrame` writes the frame at the playhead, identical to the CEP capture | QE `exportFramePNG` |
+| U2 | The panel can read and write pixels, run `src/core`, and run WebAssembly (OpenCV for Auto) | Canvas 2D `ImageData`, OpenCV.js |
+| U3 | `VideoFilterFactory.createComponent` + `createAppendComponentAction` adds the ProMatch effect | QE `addVideoEffect` |
+| U4 | `ComponentParam.createSetValueAction` sets the effect's LUT (arbitrary-data, text) and Match ID, and Premiere re-renders | ExtendScript `setValue` |
+| U5 | The LUT survives save and reopen | — |
+
+### Premiere Pro 26.3.2, UXP Developer Tools 2.3.0.5 (2026-10-24)
+
+Project MyMax - OMP30, sequence PROMATCH-TEST, playhead 00:01:49:00 on C0773.MP4.
+U1 and U2 were run with the user's go-ahead; U3–U5 need a scratch project.
+
+- **U1 PASS.** PNG and BMP at 1920×1080 are **pixel-identical** to the CEP panel's QE capture of the
+  same frame (0/255, max 0), in about 0.25 s for PNG and 12 ms for BMP.
+  - **The folder must use backslashes:** `exportSequenceFrame(seq, time, "uxp-frame.png",
+    "F:\…\out\\", w, h)`. With forward slashes it returned `false` and wrote nothing. Passing a full
+    path as the filename failed the same way.
+  - In the first run it returned `true` with forward slashes but still wrote nothing. So check that
+    the file exists; don't trust the return value.
+- **U2: the engine passes, pixels are partial, WebAssembly fails.**
+  - **`src/core` runs unchanged** (bundled by esbuild as a global): fit plus a 33³ LUT bake in
+    30 ms, `toEmbeddedText` gives the same 287,528 characters as Node. `btoa`/`atob` exist.
+  - **Canvas has no pixel access.** `getContext('2d')` exists, with `fillRect`, but there is no
+    `getImageData`, `putImageData`, `createImageData` or `drawImage`, and no `ImageData`,
+    `createImageBitmap`, `OffscreenCanvas`, `DecompressionStream` or `TextEncoder`. The panel's frame
+    views, loupe, scopes and Color/Gray all draw pixels, so none of that ports as is.
+  - **Pixels can come in through BMP:** Premiere's BMP export decodes in plain JS (24-bit, bottom-up)
+    in 15 ms for 1080p. Reading is solved. *Showing* pixels still needs another way: a WebView, an
+    `<img>` of a file the panel writes, or a Hybrid (C++) plugin.
+  - **WebAssembly: FAIL (so far).** `WebAssembly` exists, but instantiating a 41-byte module never
+    settled (no result after 20 s+). OpenCV.js, and with it geometric Auto, would need a Hybrid
+    plugin or a JS-only matcher.
+  - **The first run crashed Premiere** (Adobe crash reporter). That run did canvas, BMP, core,
+    WebAssembly, then `require` of the 11 MB `opencv.js` and a WebView, with results written only
+    at the end, so the cause isn't known. The second run (checkpointed, ending at WebAssembly) didn't
+    crash. Suspects: the OpenCV `require` or the WebView. Those are now buttons 2b and 2c, to run in a
+    scratch project.
+- **U2c PASS: a WebView gives the panel a full browser.**
+  - It needs `"allowLocalRendering": "yes"` in the manifest's `webview` permission. Without it, local
+    pages (`plugin:/…`, `file:`) fail with "Navigation disallowed", although `https://example.com`
+    loads.
+  - With it, `plugin:/webview.html` loads in about 0.3 s. The WebView is Edge WebView2 (Chrome 155):
+    Canvas 2D `putImageData` → `getImageData` round-trips, and `WebAssembly` exists.
+    `window.uxpHost.postMessage` reaches the plugin as a `message` event on the `<webview>`.
+  - So the CEP panel's UI could run nearly as is inside a WebView, with the UXP side doing the
+    Premiere calls and file access over the message bridge. OpenCV inside the WebView is likely but
+    not yet tested.
+- **U2b (OpenCV in UXP itself): not run.** It's the suspect for the first crash. With the WebView
+  route, OpenCV would load there instead.
+- **U3 PASS.** `VideoFilterFactory.getMatchNames()` lists `AE.PRMT ProMatch`. `createComponent`
+  plus `chain.createAppendComponentAction`, inside `project.lockedAccess` +
+  `executeTransaction`, appended a second ProMatch effect to C0773 (index 3), with its parameters
+  Match ID, Amount and LUT. The frame export after it worked.
+- **U4: FAIL for the LUT, and it crashed Premiere.**
+  - **Reading the LUT:** `getValueAtTime` throws "not supported for these value types. Use
+    GetKeyframeAtTime".
+  - **Setting the LUT:** `createKeyframe(<287 KB text>)` throws **"Illegal Parameter type"**. UXP's
+    keyframes take number, string, boolean, PointF or Color, but not the effect's arbitrary-data
+    parameter, even as text.
+  - **Match ID:** `createKeyframe(4242)` threw "The script object is no longer valid", because the
+    parameter object went stale across the awaits in between. Fixed in the spike by building actions
+    from fresh objects; that version never got to run.
+  - **The crash:** the next version first read every parameter with `getStartValue()`, and Premiere
+    crashed (crash reporter at 22:35:11) before anything was recorded. That is most likely
+    `getStartValue()` on the arbitrary-data LUT parameter. Not proven: it could have been Match ID's
+    or Amount's.
+- **U5: not run.**
+
+### UXP verdict (2026-10-24)
+
+**A port is possible, but not a straight one, and one-click Apply as built today doesn't survive it.**
+
+| Need | UXP | Notes |
+| --- | --- | --- |
+| Frame capture | **Yes** | `exportSequenceFrame`, identical pixels; backslash folder path |
+| Matching engine (`src/core`) | **Yes** | Unchanged |
+| Pixel UI (frames, loupe, scopes, Color/Gray) | **Only in a WebView** | UXP canvas has no pixel access; a WebView is full Chromium |
+| OpenCV (Auto) | **Probably, in the WebView** | Not in UXP's own runtime (WebAssembly never settled) |
+| Add our effect | **Yes** | `createComponent` + append action |
+| Set the embedded LUT | **No** | "Illegal Parameter type"; reading it crashed Premiere |
+
+Options for Apply under UXP:
+1. **The LUT file by Match ID.** UXP sets only the numeric Match ID (to be confirmed), and the effect
+   reads `%APPDATA%\ProMatch\luts\<id>.cube`, which it already supports as a fallback. This loses
+   portability (P9): the project no longer carries its LUT, so the files must travel with it.
+2. **Keep the embedded LUT, set from ExtendScript.** ExtendScript isn't part of the CEP removal,
+   but a UXP plugin may not be able to call it. To check.
+3. **Wait for Adobe** to support arbitrary-data parameters in UXP, and report the crash.
+
+**Recommendation:** stay on CEP for now, since it works and is supported until 2028–29. Keep the
+port plan as "WebView UI + UXP host + Apply by option 1 or 2". Re-run U4 on each new Premiere
+release.
