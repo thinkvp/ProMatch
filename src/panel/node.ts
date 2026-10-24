@@ -78,6 +78,10 @@ export function basename(p: string): string {
   return need(path).basename(p)
 }
 
+export function copyFile(from: string, to: string): void {
+  need(fs).copyFileSync(from, to)
+}
+
 export function writeBytes(p: string, bytes: ArrayBuffer): void {
   need(fs).writeFileSync(p, Buffer.from(bytes))
 }

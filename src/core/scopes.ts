@@ -1,12 +1,15 @@
 /**
- * Scope maths, the way colourists compare two shots: a vectorscope (hue and
- * saturation as Rec.709 Cb/Cr) and the luma distribution. Pure and DOM-free;
- * panel/scopes-view.ts draws the results.
+ * Scope maths, the way colourists compare two shots: a hue x saturation map
+ * (an unwrapped vectorscope, in Oklab so equal steps look equal), the luma
+ * distribution and an RGB parade. Pure and DOM-free; panel/scopes-view.ts
+ * draws the results.
  *
  * Point-based error numbers only measure AT the points. Scopes show the
  * whole picture (or a chosen part of it), so a match that is right at every
  * point but wrong in between still shows up.
  */
+
+import { decode, linearToOklab } from './color.ts'
 
 export type PixelData = Uint8ClampedArray | Uint8Array
 
@@ -35,32 +38,74 @@ export function strideFor(width: number, height: number, target = 60000): number
   return Math.max(1, Math.round(Math.sqrt((width * height) / target)))
 }
 
-export interface VectorDensity {
-  size: number
-  /** size×size counts, row-major, y down (Cr up on screen). */
+/** A 2-D histogram, row-major, y down. */
+export interface Density {
+  width: number
+  height: number
   counts: Float32Array
   max: number
 }
 
 /**
- * Vectorscope density on a size×size grid. `zoom` 1 puts Cb/Cr ±0.5 at the
- * edge; skin and most interview colours sit well inside, so 2× is the
- * useful default.
+ * Where the hue axis starts, in Oklab degrees. Magenta sits at the seam, so
+ * reds, skin and oranges stay together left of centre instead of splitting
+ * across the edges.
  */
-export function vectorscope(px: PixelData, idx: number[], size: number, zoom: number): VectorDensity {
-  const counts = new Float32Array(size * size)
-  const c = size / 2
-  const k = (size / 2 - 2) * 2 * zoom // 0.5 chroma -> edge at zoom 1
+export const HUE_START = 330
+
+/** Oklab hue of typical skin (light to dark tones all sit within a few degrees). */
+export const SKIN_HUE_DEG = 50
+
+/** Hue in Oklab degrees -> 0..1 across the hue map. */
+export function hueToX(hue: number): number {
+  return ((((hue - HUE_START) % 360) + 360) % 360) / 360
+}
+
+export function xToHue(x: number): number {
+  return (HUE_START + x * 360) % 360
+}
+
+/**
+ * Hue (across) x saturation (up) density on a width x height grid. `satMax`
+ * (Oklab chroma x100) is the top edge; anything more colourful sits on it.
+ * Near-greys and near-blacks have no meaningful hue (in the dark, one code
+ * value swings it wildly) and are left out.
+ */
+const MAP_MIN_LUMA = 6
+
+export function hueMap(planes: QualifierPlanes, idx: number[], width: number, height: number, satMax: number): Density {
+  const counts = new Float32Array(width * height)
   let max = 0
   for (const i of idx) {
-    const [, cb, cr] = ycbcr(px[i], px[i + 1], px[i + 2])
-    const x = Math.round(c + cb * k)
-    const y = Math.round(c - cr * k)
-    if (x < 0 || y < 0 || x >= size || y >= size) continue
-    const v = ++counts[y * size + x]
+    const p = i >> 2
+    const sat = planes.sat[p]
+    if (sat < HUELESS_SAT || planes.y[p] < MAP_MIN_LUMA) continue
+    const x = Math.min(width - 1, Math.floor(hueToX(planes.hue[p]) * width))
+    const y = Math.max(0, Math.round((height - 1) * (1 - Math.min(1, sat / satMax))))
+    const v = ++counts[y * width + x]
     if (v > max) max = v
   }
-  return { size, counts, max }
+  return { width, height, counts, max }
+}
+
+/**
+ * RGB parade: for each channel, image column (across, `cols` bins) by level
+ * (up, `rows` bins, 0 at the bottom). Position across is the frame's own
+ * left-to-right, so two cameras' parades compare by shape, not column.
+ */
+export function parade(px: PixelData, imgWidth: number, idx: number[], cols: number, rows: number): [Density, Density, Density] {
+  const out = [0, 1, 2].map(() => ({ width: cols, height: rows, counts: new Float32Array(cols * rows), max: 0 })) as [Density, Density, Density]
+  const kx = cols / imgWidth
+  const ky = (rows - 1) / 255
+  for (const i of idx) {
+    const x = Math.min(cols - 1, Math.floor(((i >> 2) % imgWidth) * kx))
+    for (let c = 0; c < 3; c++) {
+      const d = out[c]
+      const v = ++d.counts[(rows - 1 - Math.round(px[i + c] * ky)) * cols + x]
+      if (v > d.max) d.max = v
+    }
+  }
+  return out
 }
 
 export interface LumaStats {
@@ -70,33 +115,34 @@ export interface LumaStats {
   p05: number
   p50: number
   p95: number
-  /** Mean saturation (Cb/Cr radius, x100) and circular-mean hue in degrees. */
+  /** Mean saturation (Oklab chroma x100) and chroma-weighted mean hue in Oklab degrees. */
   saturation: number
   hue: number
   count: number
 }
 
-export function lumaStats(px: PixelData, idx: number[]): LumaStats {
+export function lumaStats(planes: QualifierPlanes, idx: number[]): LumaStats {
   const hist = new Float32Array(101)
   let sat = 0
   let hx = 0
   let hy = 0
   for (const i of idx) {
-    const [y, cb, cr] = ycbcr(px[i], px[i + 1], px[i + 2])
-    hist[Math.min(100, Math.max(0, Math.round(y * 100)))]++
-    const r = Math.hypot(cb, cr)
-    sat += r
+    const p = i >> 2
+    hist[planes.y[p]]++
+    const c = planes.sat[p]
+    sat += c
     // Hue weighted by saturation, so near-grey pixels do not dominate.
-    hx += cb
-    hy += cr
+    const h = (planes.hue[p] * Math.PI) / 180
+    hx += c * Math.cos(h)
+    hy += c * Math.sin(h)
   }
   const n = Math.max(1, idx.length)
   let acc = 0
-  const pct = (p: number) => {
+  const pct = (q: number) => {
     acc = 0
     for (let b = 0; b <= 100; b++) {
       acc += hist[b]
-      if (acc >= p * n) return b
+      if (acc >= q * n) return b
     }
     return 100
   }
@@ -105,26 +151,7 @@ export function lumaStats(px: PixelData, idx: number[]): LumaStats {
   const p95 = pct(0.95)
   for (let b = 0; b <= 100; b++) hist[b] /= n
   const hue = ((Math.atan2(hy, hx) * 180) / Math.PI + 360) % 360
-  return { hist, p05, p50, p95, saturation: (sat / n) * 100, hue, count: idx.length }
-}
-
-/** Angle of the skin-tone ("flesh") line on a Cb/Cr vectorscope, degrees from +Cb. */
-export const SKIN_LINE_DEG = 123
-
-/** The 75% colour-bar targets, for the graticule. */
-export function barTargets(): Array<{ name: string; cb: number; cr: number }> {
-  const bars: Array<[string, number, number, number]> = [
-    ['R', 0.75, 0, 0],
-    ['Yl', 0.75, 0.75, 0],
-    ['G', 0, 0.75, 0],
-    ['Cy', 0, 0.75, 0.75],
-    ['B', 0, 0, 0.75],
-    ['Mg', 0.75, 0, 0.75],
-  ]
-  return bars.map(([name, r, g, b]) => {
-    const [, cb, cr] = ycbcr(r * 255, g * 255, b * 255)
-    return { name, cb, cr }
-  })
+  return { hist, p05, p50, p95, saturation: sat / n, hue, count: idx.length }
 }
 
 /** Convex hull (monotone chain) of points, counter-clockwise. */
@@ -154,4 +181,100 @@ export function insidePolygon(poly: Array<[number, number]>, x: number, y: numbe
     if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
   }
   return inside
+}
+
+/**
+ * A range picked on the scopes, Lumetri "Color/Gray" style: pixels inside
+ * keep their colour, the rest turn grey. Luma comes from the luma scope or
+ * parade; hue and saturation from a box on the hue map. Units match the
+ * scopes: luma Y' 0–100, hue in Oklab degrees (arc from `hue[0]` round to
+ * `hue[1]`), saturation = Oklab chroma ×100.
+ */
+export interface Qualifier {
+  luma?: [number, number]
+  hue?: [number, number]
+  sat?: [number, number]
+}
+
+/** Per-pixel luma / hue / saturation of an image, so re-qualifying while dragging is cheap. */
+export interface QualifierPlanes {
+  width: number
+  height: number
+  /** Rec.709 Y' x100, as on the luma scope. */
+  y: Uint8Array
+  /** Oklab hue, degrees. */
+  hue: Float32Array
+  /** Oklab chroma x100. */
+  sat: Float32Array
+}
+
+export function qualifierPlanes(img: { width: number; height: number; data: PixelData }): QualifierPlanes {
+  const n = img.width * img.height
+  const y = new Uint8Array(n)
+  const hue = new Float32Array(n)
+  const sat = new Float32Array(n)
+  const d = img.data
+  const lin = new Float64Array(256)
+  for (let v = 0; v < 256; v++) lin[v] = decode(v / 255)
+  for (let i = 0; i < n; i++) {
+    const o = i * 4
+    y[i] = Math.round(ycbcr(d[o], d[o + 1], d[o + 2])[0] * 100)
+    const [, a, b] = linearToOklab([lin[d[o]], lin[d[o + 1]], lin[d[o + 2]]])
+    sat[i] = Math.hypot(a, b) * 100
+    hue[i] = ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360
+  }
+  return { width: img.width, height: img.height, y, hue, sat }
+}
+
+/** Below this saturation a pixel has no meaningful hue, so a hue range never includes it. */
+const HUELESS_SAT = 0.5
+
+export function inQualifier(q: Qualifier, y: number, hue: number, sat: number): boolean {
+  if (q.luma && (y < q.luma[0] || y > q.luma[1])) return false
+  if (q.sat && (sat < q.sat[0] || sat > q.sat[1])) return false
+  if (q.hue) {
+    if (sat < HUELESS_SAT) return false
+    const span = (q.hue[1] - q.hue[0] + 360) % 360
+    if ((hue - q.hue[0] + 360) % 360 > span) return false
+  }
+  return true
+}
+
+export function isActive(q: Qualifier | null): q is Qualifier {
+  return !!q && !!(q.luma || q.hue || q.sat)
+}
+
+/**
+ * Write the Color/Gray view of `src` into `out` (RGBA, same size): inside the
+ * range unchanged, outside replaced by its own luma as grey. Returns the
+ * share of pixels inside (0–1).
+ */
+export function isolate(src: PixelData, planes: QualifierPlanes, q: Qualifier, out: Uint8ClampedArray): number {
+  let inside = 0
+  const n = planes.width * planes.height
+  for (let i = 0; i < n; i++) {
+    const o = i * 4
+    if (inQualifier(q, planes.y[i], planes.hue[i], planes.sat[i])) {
+      out[o] = src[o]
+      out[o + 1] = src[o + 1]
+      out[o + 2] = src[o + 2]
+      inside++
+    } else {
+      const g = Math.round(planes.y[i] * 2.55)
+      out[o] = g
+      out[o + 1] = g
+      out[o + 2] = g
+    }
+    out[o + 3] = 255
+  }
+  return inside / Math.max(1, n)
+}
+
+/** Short human description, e.g. "Luma 40–60 · Hue 100–140° · Sat 5–20". */
+export function describeQualifier(q: Qualifier): string {
+  const parts: string[] = []
+  if (q.luma) parts.push(`Luma ${Math.round(q.luma[0])}–${Math.round(q.luma[1])}`)
+  if (q.hue) parts.push(`Hue ${Math.round(q.hue[0])}–${Math.round(q.hue[1])}°`)
+  if (q.sat) parts.push(`Sat ${Math.round(q.sat[0])}–${Math.round(q.sat[1])}`)
+  return parts.join(' · ')
 }

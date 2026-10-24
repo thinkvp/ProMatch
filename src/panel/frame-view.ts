@@ -50,6 +50,8 @@ export class FrameView {
   private ctx: CanvasRenderingContext2D
   private image: CanvasImageSource | null = null
   private overlay: CanvasImageSource | null = null
+  private isoBase: CanvasImageSource | null = null
+  private isoOverlay: CanvasImageSource | null = null
   private imgW = 0
   private imgH = 0
   /** CSS px per image px at zoom 1 (whole frame fits). */
@@ -149,6 +151,17 @@ export class FrameView {
   /** The matched preview. Any resolution; drawn stretched over the frame. */
   setOverlay(img: CanvasImageSource | null): void {
     this.overlay = img
+    this.render()
+  }
+
+  /**
+   * Color/Gray versions of the image and of the matched preview (any
+   * resolution), drawn in their place while a scope range is picked; null
+   * for none. The loupe keeps reading the real pixels.
+   */
+  setIsolation(base: CanvasImageSource | null, overlay: CanvasImageSource | null): void {
+    this.isoBase = base
+    this.isoOverlay = overlay
     this.render()
   }
 
@@ -409,13 +422,15 @@ export class FrameView {
     c.imageSmoothingEnabled = this.s * dpr < 3
     c.imageSmoothingQuality = 'high'
     const shown = this.mode !== 'original' && this.overlay ? this.overlay : this.image
-    if (this.mode === 'split' && this.overlay) {
-      this.drawView(this.image)
-      this.drawView(this.overlay, Math.round(W / 2))
+    const img = this.isoBase ?? this.image
+    const ov = this.overlay ? (this.isoOverlay ?? this.overlay) : null
+    if (this.mode === 'split' && ov) {
+      this.drawView(img)
+      this.drawView(ov, Math.round(W / 2))
       c.fillStyle = 'rgba(255,255,255,0.85)'
       c.fillRect(Math.round(W / 2) - dpr / 2, 0, dpr, H)
     } else {
-      this.drawView(shown)
+      this.drawView(this.mode !== 'original' && ov ? ov : img)
     }
 
     if (this.markersVisible) {

@@ -75,11 +75,31 @@ can be undone with **Ctrl+Z** or the ↶ button in the toolbar. **Ctrl+Shift+Z**
 so you can watch it while dragging Settings sliders. They always compare the source (blue)
 with the **matched** target (amber), whatever the image view is set to. Switch on **Original**
 to add the target as shot in grey and see what the match changed.
-- **Vectorscope:** hue and saturation (Rec.709 Cb/Cr), with the skin-tone line and 75% bar
-  targets. Overlap shows as white. Click it to zoom 1× / 2× / 4×.
-- **Luma:** overlaid histograms with 5% / 50% / 95% ticks.
+- **Hue × saturation:** an unwrapped vectorscope. Colour runs across (the strip underneath
+  shows which), saturation runs up, both in Oklab so equal distances look equally different.
+  Reds, skin and oranges sit together left of centre, with a dashed line at skin. Overlap shows
+  as white, so where blue and amber sit apart, the cameras disagree on that colour. **2×**
+  zooms 1× / 2× / 4× into the less saturated colours. Near-greys and near-blacks are left out:
+  they have no meaningful hue.
+- **Luma / Parade:** overlaid luma histograms with 5% / 50% / 95% ticks, or an RGB parade of
+  each image side by side. The parade's across axis is each frame's own left to right, so
+  compare shapes, black and white levels, and channel balance in shadows vs highlights, not
+  columns.
 - **Readout:** shadows, mids, highlights, saturation and hue for Source / Matched (/ Original).
   Matched values that differ enough from the source to matter are highlighted.
+- **Isolate a range (Color/Gray)**, like Lumetri's HSL Secondary preview:
+  - **Drag a box on the hue map** for a hue + saturation range. Starting at the bottom includes
+    everything from grey up; reaching the top includes anything more colourful.
+  - **Drag along the colour strip (H)** or **the bar left of the map (S)** for just hue or just
+    saturation, like Lumetri's sliders.
+  - **Drag across the luma scope, or up and down the parade (L)**, for a brightness range.
+  - Drag a range's edge to move that edge, or inside it to move the whole range.
+
+  Both frames then show colour only inside the range and grey elsewhere, each judged on its
+  own pixels as displayed. A good match lights up the same parts of the picture in both.
+  **In range** in the readout gives the share of the scoped area inside the range. A click on
+  a scope clears its part of the range; **Clear range** or **Esc** clears it all. Closing the
+  scopes shows the full picture again.
 - **Whole frame / Matched areas / Selected point** choose what is compared. Matched areas uses
   the planes feature matching finds in both frames (face, picture, shirt), so different framing
   doesn't skew it. It can show a mismatch the whole frame hides: on the test interview, whole
@@ -91,8 +111,18 @@ badge returns to fit. The eye button, or **H**, hides the points for a clean loo
 **Multicam:** apply the LUT to the angle's clip *inside the multicam source sequence*. Then every
 cut to that camera inherits it, and your creative grade stays on the edit as usual.
 
+**Settings:** the match always covers exposure, contrast, white balance and each picked colour.
+- **Exposure nudge** shifts the result by up to ±2 stops.
+- **Per-colour fix** sets how much of the point-by-point correction is applied.
+- **Fine-tune** holds *Colour range*, *Shade spread* and *Smoothing*.
+
+Highlights always roll off into white instead of clipping, which only engages when the match
+brightens past white.
+
 The session (frames, points, settings) is saved to `%APPDATA%\ProMatch\session.json` and
-restored when the panel reloads.
+restored when the panel reloads. Older sessions drop the model choice and switches they were
+saved with. Colour range and Smoothing values that were still at the old defaults move to the
+new ones.
 
 ## How the match works
 
@@ -104,9 +134,11 @@ All of it is in `src/core/`, with no dependency on Premiere or the DOM.
 - **Global layer** (`match.ts`, in linear light). Exposure and contrast are fitted together
   as a power curve on luminance. Cameras with different picture profiles differ most in the
   darks, and on the first real test this was the biggest single error. White balance is
-  per-channel gains. Then a 3×3 colour matrix handles sensor and profile
-  crosstalk. The matrix is ridge-regressed toward the plain exposure × balance diagonal, so one
-  or two points give a sensible exposure + balance match rather than a made-up matrix.
+  per-channel gains. The engine can also fit a ridge-regressed 3×3 colour matrix for sensor
+  crosstalk, but the panel doesn't offer it. On the real sessions so far it moved the picture
+  by about 0.3 ΔE, and it predicted unseen points slightly worse than plain balance. A camera
+  pair with real crosstalk may still need it: add it as a test case (below) and the grid will
+  show it.
 - **Local layer** (Oklab). Any error still left at each point is removed by a Gaussian
   radial-basis field centred on that point's colour. This is what makes *the apple's red*
   match: nearby reds (including its shadowed side, see *Shade spread*) move with it, and
@@ -140,13 +172,29 @@ Scores on real footage (on points each method never saw; lower is better):
 `npx tsx scripts/eval-real.ts` reruns the comparison on the current session's hand-placed
 points; set `EVAL_SESSION` to score a saved point set instead.
 - **Output** (`lut.ts`). The result is evaluated on a 17³, 33³ or 65³ grid and written as an
-  Adobe/Resolve `.cube`. If the match brightens the image, an optional highlight roll-off
-  eases values into white instead of clipping. It is invisible below 85% and off when nothing
-  goes past white.
+  Adobe/Resolve `.cube`. If the match brightens the image, a highlight roll-off eases values
+  into white instead of clipping. It is invisible below 85% and off when nothing goes past
+  white.
+
+### Checking the defaults
+
+**Save as test case** (Points tab, in Premiere) copies both frames and your own points into
+`%APPDATA%\ProMatch\eval\`. Two scripts score settings on every saved case, always on points
+the fit never saw. They use two kinds of point: your own, each left out in turn, and a few
+hundred same-spot pairs that feature matching finds away from them.
+- `npx tsx scripts/eval-options.ts` changes one setting at a time. For each it gives the error
+  and how much the whole matched frame changes, i.e. whether the setting does anything visible.
+- `npx tsx scripts/eval-grid.ts` searches combinations and lists the best.
+
+The current defaults came from this: white balance (no matrix), colour range 0.15 and
+smoothing 0.1. On unseen points they score 3.91 ΔE, against 4.35 for the earlier matrix, 0.12
+and 0.03. The evidence so far is one camera pair, so add test cases from other cameras and
+lighting before trusting the defaults further.
 
 `npm test` checks the engine against synthetic second cameras with known errors: exposure,
-white balance, crosstalk and a red-only hue twist. For example, the apple's error goes from
-ΔE 11.6 to 0.1, while an unrelated blue moves less than 1.
+white balance, crosstalk and a red-only hue twist. For example, at its tightest (matrix, narrow
+colour range) the apple's error goes from ΔE 11.6 to 0.1, while an unrelated blue moves less
+than 1. With the smoother defaults it goes to 1.4.
 
 ## Trying it without Premiere
 

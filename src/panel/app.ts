@@ -8,7 +8,19 @@ import { suggestPairs } from '../core/auto.ts'
 import { type Vec3, toHex } from '../core/color.ts'
 import { matchFeatures } from '../core/features.ts'
 import { findPlanes } from '../core/homography.ts'
-import { convexHull, insidePolygon, lumaStats, pixelIndices, strideFor, vectorscope } from '../core/scopes.ts'
+import {
+  type Qualifier,
+  type QualifierPlanes,
+  convexHull,
+  describeQualifier,
+  inQualifier,
+  insidePolygon,
+  isActive,
+  isolate,
+  pixelIndices,
+  qualifierPlanes,
+  strideFor,
+} from '../core/scopes.ts'
 import { suggestFromMatches } from '../core/geo-auto.ts'
 import { type Lut3D, applyLutToPixels, bakeLut, toCube, toEmbeddedText } from '../core/lut.ts'
 import {
@@ -30,7 +42,7 @@ import * as host from './host.ts'
 import { clearErrorBadge, log } from './log.ts'
 import * as node from './node.ts'
 import { loadOpenCv } from './opencv.ts'
-import { ScopesView } from './scopes-view.ts'
+import { type ScopeLayer, ScopesView, type ToneScope } from './scopes-view.ts'
 
 type Role = 'source' | 'target'
 const ROLES: Role[] = ['source', 'target']
@@ -98,6 +110,26 @@ interface Session {
   lutNameAuto: boolean
   /** Which %APPDATA%ProMatchluts<id>.cube the native effect reads for this match. */
   matchId?: number
+  /** 2 = options from after the old defaults (matrix, colour range 0.12, smoothing 0.03). */
+  optsVersion?: number
+}
+
+/**
+ * Options from a saved session, in today's terms. The panel always matches
+ * exposure, contrast and colour and rolls off highlights, so a saved model
+ * choice or switch is dropped; untouched old defaults move to the new ones.
+ */
+function migrateOptions(s: Session): MatchOptions {
+  const o: MatchOptions = { ...DEFAULT_OPTIONS, ...s.opts }
+  o.globalModel = DEFAULT_OPTIONS.globalModel
+  o.autoExposure = true
+  o.matchContrast = true
+  o.highlightRolloff = true
+  if ((s.optsVersion ?? 1) < 2) {
+    if (o.colourRange === 0.12) o.colourRange = DEFAULT_OPTIONS.colourRange
+    if (o.smoothing === 0.03) o.smoothing = DEFAULT_OPTIONS.smoothing
+  }
+  return o
 }
 
 type NumericOption = 'exposureOffset' | 'localStrength' | 'colourRange' | 'shadeSpread' | 'smoothing'
@@ -201,6 +233,11 @@ export class App {
   private areas: MatchedAreas | 'pending' | 'failed' | null = null
   /** The matched target preview's pixels (same size as Frame.small). */
   private previewData: ImageData | null = null
+  /** Range picked on the scopes; while set (and scopes open) the frames show Color/Gray. */
+  private qualifier: Qualifier | null = null
+  private planes = new WeakMap<ImageData, QualifierPlanes>()
+  private isoCanvases = { source: canvasOf(1, 1), targetBase: canvasOf(1, 1), targetMatched: canvasOf(1, 1) }
+  private isolationPending = false
   private markersVisible = true
 
   async init(): Promise<void> {
@@ -208,7 +245,12 @@ export class App {
       source: this.makeView('source'),
       target: this.makeView('target'),
     }
-    this.scopes = new ScopesView($('#vscope') as HTMLCanvasElement, $('#lscope') as HTMLCanvasElement, $('#scope-readout'))
+    this.scopes = new ScopesView($('#hscope') as HTMLCanvasElement, $('#lscope') as HTMLCanvasElement, $('#scope-readout'))
+    this.scopes.onRange = (q) => {
+      this.qualifier = q
+      this.renderRangeBar()
+      this.scheduleIsolation()
+    }
     this.bindControls()
     this.bindKeys()
     this.applyLayout()
@@ -294,19 +336,26 @@ export class App {
         this.renderScopes()
       })
     }
-    const zoomScope = () => {
+    $('#hscope-zoom').addEventListener('click', () => {
       this.scopes.zoom = this.scopes.zoom === 1 ? 2 : this.scopes.zoom === 2 ? 4 : 1
-      $('#vscope-zoom').textContent = `${this.scopes.zoom}×`
+      $('#hscope-zoom').textContent = `${this.scopes.zoom}×`
       this.renderScopes()
+    })
+    for (const b of document.querySelectorAll<HTMLButtonElement>('#tone-scope button')) {
+      b.addEventListener('click', () => {
+        this.scopes.tone = b.dataset.tone as ToneScope
+        for (const o of document.querySelectorAll<HTMLButtonElement>('#tone-scope button')) o.setAttribute('aria-pressed', String(o === b))
+        $('#tone-note').textContent = this.scopes.tone === 'luma' ? 'ticks: 5% · 50% · 95%' : 'each image left to right · drag up/down'
+        this.renderScopes()
+      })
     }
-    $('#vscope-zoom').addEventListener('click', zoomScope)
     const orig = $('#scope-original') as HTMLInputElement
     orig.addEventListener('change', () => {
       this.scopeOriginal = orig.checked
       $('#lg-orig-wrap').hidden = !orig.checked
       this.renderScopes()
     })
-    $('#vscope').addEventListener('click', zoomScope)
+    $('#scope-range-clear').addEventListener('click', () => this.scopes.setQualifier(null))
     $('#auto-points').addEventListener('click', () => this.runAuto())
     $('#clear-auto').addEventListener('click', () => {
       this.remember()
@@ -318,27 +367,9 @@ export class App {
       b.addEventListener('click', () => this.selectTab(b.dataset.tab!))
     }
 
-    const model = $('#opt-model') as HTMLSelectElement
-    model.addEventListener('change', () => {
-      this.opts.globalModel = model.value as MatchOptions['globalModel']
-      this.scheduleUpdate()
-    })
-    const autoExp = $('#opt-autoexp') as HTMLInputElement
-    autoExp.addEventListener('change', () => {
-      this.opts.autoExposure = autoExp.checked
-      this.scheduleUpdate()
-    })
-    const contrast = $('#opt-contrast') as HTMLInputElement
-    contrast.addEventListener('change', () => {
-      this.opts.matchContrast = contrast.checked
-      this.labelModels()
-      this.scheduleUpdate()
-    })
-    const roll = $('#opt-rolloff') as HTMLInputElement
-    roll.addEventListener('change', () => {
-      this.opts.highlightRolloff = roll.checked
-      this.scheduleUpdate()
-    })
+    // Test cases are files in %APPDATA%: Premiere only.
+    ;($('#save-test-case') as HTMLButtonElement).hidden = !node.hasNode
+    $('#save-test-case').addEventListener('click', () => this.saveTestCase())
 
     for (const s of SLIDERS) {
       const row = document.createElement('label')
@@ -458,23 +489,8 @@ export class App {
     if (open) clearErrorBadge()
   }
 
-  /**
-   * The first model is "exposure and contrast" only while contrast matching
-   * is on; say exactly what it does. The others read as additions to it.
-   */
-  private labelModels(): void {
-    const base = this.opts.matchContrast ? 'Exposure & contrast only' : 'Exposure only'
-    $('#opt-model-base').textContent = base
-    $('#model-base-name').textContent = base
-  }
-
   /** Push current state into the form controls (after restore). */
   private syncControls(): void {
-    ;($('#opt-model') as HTMLSelectElement).value = this.opts.globalModel
-    ;($('#opt-autoexp') as HTMLInputElement).checked = this.opts.autoExposure
-    ;($('#opt-contrast') as HTMLInputElement).checked = this.opts.matchContrast
-    this.labelModels()
-    ;($('#opt-rolloff') as HTMLInputElement).checked = this.opts.highlightRolloff
     for (const s of SLIDERS) {
       const input = $(`.slider input[data-key="${s.key}"]`) as HTMLInputElement
       const v = s.key === 'radiusScale' ? this.radiusScale : this.opts[s.key]
@@ -518,6 +534,8 @@ export class App {
       if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedId !== null) {
         this.removePair(this.selectedId)
         e.preventDefault()
+      } else if (e.key === 'Escape' && this.pendingId === null && isActive(this.qualifier) && this.scopesOn) {
+        this.scopes.setQualifier(null)
       } else if (e.key === 'Escape' && this.pendingId !== null) {
         this.removePair(this.pendingId)
       }
@@ -753,6 +771,66 @@ export class App {
     $('#toggle-scopes').setAttribute('aria-pressed', String(on))
     this.applyLayout()
     this.renderScopes()
+    // The range lives on the scopes: closing them shows the full picture again.
+    this.applyIsolation()
+  }
+
+  private renderRangeBar(): void {
+    const active = isActive(this.qualifier)
+    $('#scope-range').classList.toggle('active', active)
+    $('#scope-range-text').textContent = active ? describeQualifier(this.qualifier!) : 'Drag on a scope to isolate a range'
+    ;($('#scope-range-clear') as HTMLButtonElement).hidden = !active
+  }
+
+  /** At most one Color/Gray rebuild per animation frame while a range is dragged. */
+  private scheduleIsolation(): void {
+    if (this.isolationPending) return
+    this.isolationPending = true
+    requestAnimationFrame(() => {
+      this.isolationPending = false
+      this.applyIsolation()
+    })
+  }
+
+  /**
+   * Color/Gray both frames for the picked range: each frame qualified on its
+   * own pixels as displayed (source; target as shot and matched), so a good
+   * match lights up the same parts of the picture in both.
+   */
+  private applyIsolation(): void {
+    const src = this.frames.source
+    const tgt = this.frames.target
+    const q = this.qualifier
+    if (!this.scopesOn || !isActive(q) || !src || !tgt || !this.previewData) {
+      for (const role of ROLES) this.views[role].setIsolation(null, null)
+      if (this.scopes.shares) this.renderScopes()
+      return
+    }
+    const iso = (img: ImageData, canvas: HTMLCanvasElement): HTMLCanvasElement => {
+      const pl = this.planesOf(img)
+      if (canvas.width !== img.width || canvas.height !== img.height) {
+        canvas.width = img.width
+        canvas.height = img.height
+      }
+      const out = new ImageData(img.width, img.height)
+      isolate(img.data, pl, q, out.data)
+      canvas.getContext('2d')!.putImageData(out, 0, 0)
+      return canvas
+    }
+    this.views.source.setIsolation(iso(src.small, this.isoCanvases.source), null)
+    this.views.target.setIsolation(iso(tgt.small, this.isoCanvases.targetBase), iso(this.previewData, this.isoCanvases.targetMatched))
+    // The "In range" shares follow the scope area; recompute them with the scopes.
+    this.renderScopes()
+  }
+
+  /** Luma/hue/saturation planes of an image, computed once per image. */
+  private planesOf(img: ImageData): QualifierPlanes {
+    let pl = this.planes.get(img)
+    if (!pl) {
+      pl = qualifierPlanes(img)
+      this.planes.set(img, pl)
+    }
+    return pl
   }
 
   /**
@@ -821,12 +899,23 @@ export class App {
       this.scopes.clear('Nothing to show for this area.')
       return
     }
-    const size = this.scopes.vectorSize()
-    this.scopes.render(
-      { vector: vectorscope(sPx.data, si, size, this.scopes.zoom), luma: lumaStats(sPx.data, si) },
-      { vector: vectorscope(tPx.data, ti, size, this.scopes.zoom), luma: lumaStats(tPx.data, ti) },
-      this.scopeOriginal ? { vector: vectorscope(oPx.data, ti, size, this.scopes.zoom), luma: lumaStats(oPx.data, ti) } : null,
-    )
+    // Share of the SCOPED area inside the picked range: whole frames framed
+    // differently (close-up vs wide) would differ for framing reasons alone.
+    if (isActive(this.qualifier)) {
+      const q = this.qualifier
+      const share = (img: ImageData, idx: number[]) => {
+        const pl = this.planesOf(img)
+        let n = 0
+        for (const i of idx) {
+          const p = i >> 2
+          if (inQualifier(q, pl.y[p], pl.hue[p], pl.sat[p])) n++
+        }
+        return n / idx.length
+      }
+      this.scopes.shares = { source: share(sPx, si), matched: share(tPx, ti), original: share(oPx, ti) }
+    } else this.scopes.shares = null
+    const layer = (img: ImageData, idx: number[]): ScopeLayer => ({ px: img.data, width: img.width, planes: this.planesOf(img), idx })
+    this.scopes.render(layer(sPx, si), layer(tPx, ti), this.scopeOriginal ? layer(oPx, ti) : null)
     if (note) $('#scope-readout').insertAdjacentHTML('beforeend', `<p class="scope-empty">${note}</p>`)
   }
 
@@ -999,6 +1088,7 @@ export class App {
     this.renderHint()
     this.renderProgress()
     this.renderScopes()
+    this.applyIsolation()
     this.scheduleSave()
   }
 
@@ -1145,8 +1235,7 @@ export class App {
     const g = m.balance
     const chips = [`Exposure ${st >= 0 ? '+' : '−'}${Math.abs(st).toFixed(2)} st`]
     // Always the same chips, so the list below never jumps when a point is toggled.
-    if (this.opts.matchContrast) chips.push(`Contrast ×${m.contrast.toFixed(2)}`)
-    if (this.opts.globalModel !== 'exposure') chips.push(`R ${g[0].toFixed(2)} · G ${g[1].toFixed(2)} · B ${g[2].toFixed(2)}`)
+    chips.push(`Contrast ×${m.contrast.toFixed(2)}`, `R ${g[0].toFixed(2)} · G ${g[1].toFixed(2)} · B ${g[2].toFixed(2)}`)
     el.innerHTML =
       `<div class="q-main" title="${
         isTested
@@ -1435,11 +1524,62 @@ export class App {
       lutName: this.lutName,
       lutNameAuto: this.lutNameAuto,
       matchId: this.matchId ?? undefined,
+      optsVersion: 2,
     }
     try {
       node.writeText(this.sessionPath(), JSON.stringify(s, null, 1))
     } catch (e) {
       log(`Could not save session: ${(e as Error).message}`, 'warn')
+    }
+  }
+
+  /**
+   * Copy both frames and the points into %APPDATA%\ProMatch\eval\, where
+   * scripts/eval-options.ts and eval-grid.ts score settings on them. Every
+   * camera pair and lighting set added makes the defaults more trustworthy.
+   */
+  private saveTestCase(): void {
+    const src = this.frames.source
+    const tgt = this.frames.target
+    const pairs = this.pairs.filter((p) => p.source && p.target && !p.auto && !p.off)
+    if (!src?.path || !tgt?.path) {
+      log('Save as test case needs both frames captured or opened from disk.', 'warn')
+      return
+    }
+    if (pairs.length < 3) {
+      log('Save as test case needs at least 3 of your own points (Auto points are left out).', 'warn')
+      return
+    }
+    try {
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+      const name = node.safeFileName(`${src.label.split(' @')[0]} vs ${tgt.label.split(' @')[0]} ${stamp} ${pairs.length}pts`).replace(/\s+/g, '-')
+      const dir = node.ensureDir(node.join(node.dataDir(), 'eval', name))
+      const frames: Session['frames'] = {}
+      for (const [role, f] of [
+        ['source', src],
+        ['target', tgt],
+      ] as const) {
+        const to = node.join(dir, `${role}${f.path!.slice(f.path!.lastIndexOf('.'))}`)
+        node.copyFile(f.path!, to)
+        frames[role] = { path: to, label: f.label }
+      }
+      const s: Session = {
+        version: 1,
+        frames,
+        pairs,
+        nextId: this.nextId,
+        opts: this.opts,
+        radiusScale: this.radiusScale,
+        lutSize: this.lutSize,
+        lutName: this.lutName,
+        lutNameAuto: this.lutNameAuto,
+        optsVersion: 2,
+      }
+      const file = node.join(node.dataDir(), 'eval', `${name}.json`)
+      node.writeText(file, JSON.stringify(s, null, 1))
+      log(`Saved test case: ${pairs.length} points, frames copied beside it (${file}).`)
+    } catch (e) {
+      log(`Could not save the test case: ${(e as Error).message}`, 'warn')
     }
   }
 
@@ -1449,7 +1589,7 @@ export class App {
       if (!node.hasNode || !node.exists(this.sessionPath())) return
       const s = JSON.parse(node.readText(this.sessionPath())) as Session
       if (s.version !== 1) return
-      this.opts = { ...DEFAULT_OPTIONS, ...s.opts }
+      this.opts = migrateOptions(s)
       this.radiusScale = s.radiusScale ?? 0
       this.lutSize = s.lutSize ?? this.lutSize
       this.lutName = s.lutName ?? this.lutName

@@ -14,7 +14,7 @@ import { DEFAULT_OPTIONS, type MatchOptions, type PairInput, applyModel, crossVa
 import { bakeLut, parseCube, parseEmbeddedText, sampleLut, sampleLutTetra, toCube, toEmbeddedText } from '../src/core/lut.ts'
 import { sampleDisc } from '../src/core/sample.ts'
 import { analyse } from '../src/core/analysis.ts'
-import { convexHull, insidePolygon, lumaStats, pixelIndices, vectorscope, ycbcr } from '../src/core/scopes.ts'
+import { type Qualifier, SKIN_HUE_DEG, convexHull, hueMap, hueToX, inQualifier, insidePolygon, isolate, lumaStats, parade, pixelIndices, qualifierPlanes, xToHue, ycbcr } from '../src/core/scopes.ts'
 import { suggestPairs } from '../src/core/auto.ts'
 import { suggestFromMatches } from '../src/core/geo-auto.ts'
 import { type Correspondence, type Homography, type Pt, applyH, findPlanes, ransacHomography } from '../src/core/homography.ts'
@@ -52,6 +52,14 @@ function meanDE(pairs: Array<[Vec3, Vec3]>): number {
 function pairsFrom(colours: Vec3[], cam: (c: Vec3) => Vec3): PairInput[] {
   return colours.map((c) => ({ source: sample(c), target: sample(cam(c)) }))
 }
+
+/**
+ * The match at its tightest: matrix for the synthetic camera's crosstalk, a
+ * narrow colour range and little smoothing. For tests of a mechanism (the
+ * local layer, Auto's pairs) rather than of the defaults, which trade
+ * exactness at the points for smoother results between them.
+ */
+const TIGHT: MatchOptions = { ...DEFAULT_OPTIONS, globalModel: 'matrix', colourRange: 0.12, smoothing: 0.03 }
 
 function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: Vec3) => Vec3) {
   const model = fitMatch(pairsFrom(train, cam), opts)
@@ -124,8 +132,9 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   const apple: Vec3 = [0.75, 0.12, 0.1]
   const train: Vec3[] = [apple, [0.62, 0.6, 0.57], [0.3, 0.45, 0.6], [0.35, 0.55, 0.3], [0.85, 0.7, 0.55]]
   const pairs = pairsFrom(train, cam)
-  const globalOnly = fitMatch(pairs, { ...DEFAULT_OPTIONS, localStrength: 0 })
-  const full = fitMatch(pairs, DEFAULT_OPTIONS)
+  const globalOnly = fitMatch(pairs, { ...TIGHT, localStrength: 0 })
+  const full = fitMatch(pairs, TIGHT)
+  const byDefault = fitMatch(pairs, DEFAULT_OPTIONS)
   const de = (m: typeof full, c: Vec3) => deltaE(encodedToOklab(applyModel(m, cam(c))), encodedToOklab(c))
   console.log(`      apple ΔE: uncorrected ${deltaE(encodedToOklab(cam(apple)), encodedToOklab(apple)).toFixed(2)} | global ${de(globalOnly, apple).toFixed(2)} | global+local ${de(full, apple).toFixed(2)}`)
   check('local layer nails the sampled apple', de(full, apple) < 1, `ΔE ${de(full, apple).toFixed(2)}`)
@@ -136,6 +145,8 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   check('  ...without dragging unrelated colours around', skyShift < 1.5, `blue moved ΔE ${skyShift.toFixed(2)} by the local layer`)
   const rep = reportPairs(full, pairs)
   check('report: every pair improves', rep.every((r) => r.after <= r.before), rep.map((r) => `${r.before.toFixed(1)}->${r.after.toFixed(1)}`).join(' '))
+  const raw = deltaE(encodedToOklab(cam(apple)), encodedToOklab(apple))
+  check('  ...and the defaults still fix most of it', de(byDefault, apple) < raw * 0.2, `ΔE ${raw.toFixed(2)} -> ${de(byDefault, apple).toFixed(2)}`)
 }
 
 {
@@ -277,7 +288,11 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   const src = render((c) => c, 0, 0, 1)
   const tgt = render(camB, 0.08, 0.05, 0.85)
   const sug = suggestPairs(analyse(src), analyse(tgt))
-  const model = fitMatch(sug.map((g) => ({ source: sampleDisc(src, g.source.x, g.source.y, 3), target: sampleDisc(tgt, g.target.x, g.target.y, 3) })))
+  // Scores the pairs, not the defaults.
+  const model = fitMatch(
+    sug.map((g) => ({ source: sampleDisc(src, g.source.x, g.source.y, 3), target: sampleDisc(tgt, g.target.x, g.target.y, 3) })),
+    TIGHT,
+  )
   const cols = blocks.map((b) => b[4])
   const before = meanDE(cols.map((c) => [camB(c), c]))
   const after = meanDE(cols.map((c) => [applyModel(model, camB(c)), c]))
@@ -359,7 +374,10 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   const res = suggestFromMatches(matches, src, tgt)
   const mapErr = Math.max(...res.suggestions.map((g) => Math.hypot(applyH(Hs, [g.source.x, g.source.y])[0] - g.target.x, applyH(Hs, [g.source.x, g.source.y])[1] - g.target.y)))
   const flat = res.suggestions.every((g) => sampleDisc(src, g.source.x, g.source.y, 4).spread < 0.02)
-  const model = fitMatch(res.suggestions.map((g) => ({ source: sampleDisc(src, g.source.x, g.source.y, 4), target: sampleDisc(tgt, g.target.x, g.target.y, 5) })))
+  const model = fitMatch(
+    res.suggestions.map((g) => ({ source: sampleDisc(src, g.source.x, g.source.y, 4), target: sampleDisc(tgt, g.target.x, g.target.y, 5) })),
+    TIGHT,
+  )
   const cols = blocks.map((b) => b[4])
   const before = meanDE(cols.map((c) => [camB(c), c]))
   const after = meanDE(cols.map((c) => [applyModel(model, camB(c)), c]))
@@ -383,17 +401,36 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
 
 {
   // Scopes: the maths a colourist would sanity-check.
-  const [, cbR, crR] = ycbcr(255, 0, 0)
-  check('vectorscope: red sits upper-left (Cb < 0, Cr = +0.5)', cbR < -0.1 && Math.abs(crR - 0.5) < 1e-9)
   const [yG, cbG, crG] = ycbcr(128, 128, 128)
-  check('  ...and grey sits dead centre', Math.abs(cbG) < 1e-9 && Math.abs(crG) < 1e-9 && Math.abs(yG - 128 / 255) < 1e-9)
+  check('Rec.709 luma of grey, with no chroma', Math.abs(cbG) < 1e-9 && Math.abs(crG) < 1e-9 && Math.abs(yG - 128 / 255) < 1e-9)
   // Luma ramp 0..255 across 256 pixels: percentiles land where they should.
   const ramp = new Uint8ClampedArray(256 * 4)
   for (let i = 0; i < 256; i++) ramp.set([i, i, i, 255], i * 4)
-  const st = lumaStats(ramp, pixelIndices(256, 1, 1))
+  const rampIdx = pixelIndices(256, 1, 1)
+  const rampPl = qualifierPlanes({ width: 256, height: 1, data: ramp })
+  const st = lumaStats(rampPl, rampIdx)
   check('luma percentiles on a ramp', Math.abs(st.p05 - 5) <= 1 && Math.abs(st.p50 - 50) <= 1 && Math.abs(st.p95 - 95) <= 1, `${st.p05} / ${st.p50} / ${st.p95}`)
-  const v = vectorscope(ramp, pixelIndices(256, 1, 1), 64, 2)
-  check('  ...and a grey ramp is one dot in the vectorscope', v.counts[32 * 64 + 32] === 256)
+  check('  ...and a grey ramp has no saturation, so nothing on the hue map', st.saturation < 0.01 && hueMap(rampPl, rampIdx, 36, 16, 16).max === 0)
+  // Hue map: skin lands on the skin marker, left of centre; more saturated sits higher.
+  const skin = new Uint8ClampedArray([224, 172, 140, 255, 198, 134, 104, 255, 141, 85, 60, 255, 240, 130, 90, 255])
+  const skinPl = qualifierPlanes({ width: 4, height: 1, data: skin })
+  const skinHues = [...skinPl.hue]
+  check('hue map: skin tones sit on the skin line', skinHues.every((h) => Math.abs(h - SKIN_HUE_DEG) < 12), skinHues.map((h) => h.toFixed(0)).join(', '))
+  check('  ...left of centre, unsplit by the seam', hueToX(SKIN_HUE_DEG) > 0.1 && hueToX(SKIN_HUE_DEG) < 0.4 && Math.abs(xToHue(hueToX(123)) - 123) < 1e-9)
+  const hm = hueMap(skinPl, pixelIndices(4, 1, 1), 36, 16, 16)
+  const rowOf = (i: number) => {
+    const col = Math.floor(hueToX(skinPl.hue[i]) * 36)
+    for (let y = 0; y < 16; y++) if (hm.counts[y * 36 + col]) return y
+    return -1
+  }
+  check('  ...and a more saturated orange plots higher than pale skin', rowOf(3) < rowOf(0) && rowOf(0) >= 0, `rows ${rowOf(3)} vs ${rowOf(0)}`)
+  // Parade: a left-dark, right-bright frame rises left to right in every channel.
+  const pd = parade(ramp, 256, rampIdx, 8, 11)
+  const top = (d: (typeof pd)[0], x: number) => {
+    for (let y = 0; y < d.height; y++) if (d.counts[y * d.width + x]) return y
+    return -1
+  }
+  check('RGB parade: level up, image left to right', pd.every((d) => top(d, 0) >= 9 && top(d, 0) > top(d, 3) && top(d, 3) > top(d, 7) && top(d, 7) === 0))
   const hull = convexHull([[0, 0], [10, 0], [10, 10], [0, 10], [5, 5], [2, 8]])
   check('convex hull drops interior points', hull.length === 4 && insidePolygon(hull, 5, 5) && !insidePolygon(hull, 11, 5))
 }
@@ -416,6 +453,30 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
     worst = Math.max(worst, dr + Math.min(dh, 2 * Math.PI - dh) * 0.1)
   }
   check('Exposure-only model leaves hue and saturation alone (per-colour at 100%)', worst < 0.02, `worst colour change ${worst.toFixed(4)}`)
+}
+
+{
+  // Scope ranges (Color/Gray): luma band, hue wedge across 0°, grey has no hue.
+  const px = new Uint8ClampedArray([
+    200, 40, 40, 255, // red: Oklab hue ~ 28°
+    200, 40, 120, 255, // pink: Oklab hue ~ 358°, just under 0°/360°
+    128, 128, 128, 255, // grey: no hue
+    20, 20, 20, 255, // near black
+  ])
+  const pl = qualifierPlanes({ width: 4, height: 1, data: px })
+  const out = new Uint8ClampedArray(16)
+  const keepIdx = (q: Qualifier) => {
+    isolate(px, pl, q, out)
+    return [0, 1, 2, 3].filter((i) => out[i * 4] === px[i * 4] && out[i * 4 + 1] === px[i * 4 + 1] && out[i * 4 + 2] === px[i * 4 + 2] && !(px[i * 4] === px[i * 4 + 1] && px[i * 4 + 1] === px[i * 4 + 2]))
+  }
+  const redHue = pl.hue[0]
+  const pinkHue = pl.hue[1]
+  check('range: a hue range keeps only that colour', keepIdx({ hue: [redHue - 10, redHue + 10] }).join() === '0', `red at ${redHue.toFixed(0)}°, pink at ${pinkHue.toFixed(0)}°`)
+  check('  ...a range across 0°/360° works', pinkHue > 350 && keepIdx({ hue: [350, 5] }).join() === '1')
+  check('  ...and saturation limits it', keepIdx({ sat: [0, 5] }).join() === '' && keepIdx({ sat: [15, 100] }).join() === '0,1')
+  const share = isolate(px, pl, { luma: [40, 60] }, out)
+  check('  ...a luma band keeps only that brightness, and greys the rest by their own luma', share === 0.25 && out[8] === 128 && out[12] === Math.round(pl.y[3] * 2.55), `share ${share}`)
+  check('  ...grey pixels never fall in a hue range', !inQualifier({ hue: [0, 359] }, pl.y[2], pl.hue[2], pl.sat[2]))
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall passed')

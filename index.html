@@ -48,7 +48,7 @@
                         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"/><path d="M13 6.5H6.5a3.5 3.5 0 000 7H9"/></svg>
                     </button>
                     <span class="bar-spacer"></span>
-                    <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: vectorscope and luma, source vs target (S)">
+                    <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: hue map, luma and RGB parade, source vs target (S)">
                         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12"/><circle cx="6.4" cy="6.6" r="1.1" class="fill"/></svg>
                         Scopes
                     </button>
@@ -115,6 +115,7 @@
                     <div class="scopes-bar">
                         <span class="scope-legend"><i class="lg-src"></i>Source <i class="lg-tgt"></i>Target, matched <span id="lg-orig-wrap" hidden><i class="lg-orig"></i>Target, original</span></span>
                         <label class="toggle small-toggle" title="Also show the target as shot (grey), to see what the match changed"><input type="checkbox" class="switch" id="scope-original"><span>Original</span></label>
+                        <span class="scope-range" id="scope-range"><span id="scope-range-text" class="small">Drag on a scope to isolate a range</span> <button id="scope-range-clear" class="link" hidden title="Show the full picture again (Esc)">Clear range</button></span>
                         <span class="bar-spacer"></span>
                         <div class="seg" id="scope-area" role="group" aria-label="Scope area">
                             <button data-area="frame" aria-pressed="true" title="Every pixel of both frames">Whole frame</button>
@@ -123,13 +124,19 @@
                         </div>
                     </div>
                     <div class="scopes-body">
-                        <figure class="scope">
-                            <canvas id="vscope"></canvas>
-                            <figcaption>Vectorscope <button id="vscope-zoom" class="link" title="Zoom the vectorscope">2×</button></figcaption>
+                        <figure class="scope wide hue">
+                            <canvas id="hscope" title="Drag a box to isolate those colours; drag along the colour strip (H) or the bar on the left (S) for just hue or saturation"></canvas>
+                            <figcaption>Hue × saturation <span class="small">colour across · more saturated up</span> <button id="hscope-zoom" class="link" title="Zoom into the less saturated colours">2×</button></figcaption>
                         </figure>
                         <figure class="scope wide">
-                            <canvas id="lscope"></canvas>
-                            <figcaption>Luma <span class="small">ticks: 5% · 50% · 95%</span></figcaption>
+                            <canvas id="lscope" title="Drag to isolate a brightness range"></canvas>
+                            <figcaption>
+                                <span class="seg mini" id="tone-scope" role="group" aria-label="Tone scope">
+                                    <button data-tone="luma" aria-pressed="true" title="Luma histograms, overlaid">Luma</button>
+                                    <button data-tone="parade" aria-pressed="false" title="RGB parade of each image, side by side">Parade</button>
+                                </span>
+                                <span class="small" id="tone-note">ticks: 5% · 50% · 95%</span>
+                            </figcaption>
                         </figure>
                         <div class="scope-readout" id="scope-readout"></div>
                     </div>
@@ -149,23 +156,11 @@
                         <span></span><span>Source</span><span>Target</span><span>Result</span><span class="de-col" title="After = tested: how close the match gets at each point when fitted without it">ΔE before → tested</span><span></span>
                     </div>
                     <ol id="points" class="points"></ol>
-                    <div class="points-foot"><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
+                    <div class="points-foot"><button id="save-test-case" class="link" title="Keep these frames and points for checking ProMatch's defaults (scripts/eval-grid.ts). Saved to %APPDATA%\ProMatch\eval\">Save as test case</button><span class="bar-spacer"></span><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
                 </section>
 
                 <section class="tab-panel" data-panel="settings" role="tabpanel" hidden>
                     <div class="controls settings">
-                        <label class="row" title="The overall correction applied to every colour. Exposure and contrast each also have their own switch below.">
-                            <span>Overall model</span>
-                            <select id="opt-model">
-                                <option value="exposure" id="opt-model-base">Exposure &amp; contrast only</option>
-                                <option value="balance">+ white balance</option>
-                                <option value="matrix">+ white balance + colour matrix</option>
-                            </select>
-                        </label>
-                        <p class="field-help">Per-colour fix corrects each point on top of this, so with many points or a wide Colour range the two colour models look alike. <b><span id="model-base-name">Exposure &amp; contrast only</span></b> never changes hue or saturation: its per-colour fixes move brightness only.</p>
-                        <label class="toggle"><input type="checkbox" class="switch" id="opt-autoexp"><span>Match exposure</span></label>
-                        <label class="toggle" title="Cameras with different picture profiles differ more in the shadows than the highlights. Needs points at different brightnesses."><input type="checkbox" class="switch" id="opt-contrast"><span>Match contrast</span></label>
-                        <label class="toggle" title="Ease highlights into white instead of clipping them when the match brightens the image."><input type="checkbox" class="switch" id="opt-rolloff"><span>Roll off highlights</span></label>
                         <div id="sliders" class="sliders"></div>
                         <div class="sub">
                             <h3 class="sub-head">Fine-tune</h3>

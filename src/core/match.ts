@@ -54,6 +54,15 @@ export interface PairInput {
 
 export type GlobalModel = 'exposure' | 'balance' | 'matrix'
 
+/**
+ * The panel always uses the defaults' 'balance' model (exposure, contrast,
+ * white balance, then per-colour fixes) and rolls off highlights; it only
+ * exposes the sliders. The other choices stay for tests and the eval
+ * scripts: on real sessions they made no visible difference (the matrix vs
+ * plain balance moved the frame by ~0.3 ΔE) or did not do what they said
+ * (with "match exposure" off the per-colour layer matched brightness at the
+ * points anyway: the frame still darkened 1.49 stops against 1.50).
+ */
 export interface MatchOptions {
   /** Match brightness from the pairs. Off = keep the target's exposure. */
   autoExposure: boolean
@@ -80,16 +89,26 @@ export interface MatchOptions {
   highlightRolloff: boolean
 }
 
+/**
+ * Chosen with scripts/eval-grid.ts on real interview sessions, scored only on
+ * points the fit did not see (leave-one-out, plus feature-matched same-spot
+ * pairs). Against the earlier defaults (matrix, colour range 0.12,
+ * smoothing 0.03) these cut that error from 4.35 to 3.91 ΔE: the earlier
+ * ones bent too tightly around the picked points, and the matrix did not
+ * earn its nine numbers. One camera pair so far, and one the matrix cannot
+ * help: a pair with real channel crosstalk (scripts/synthetic.ts) still
+ * needs it. Add sessions with "Save as test case" and re-run the grid.
+ */
 export const DEFAULT_OPTIONS: MatchOptions = {
   autoExposure: true,
   exposureOffset: 0,
   matchContrast: true,
-  globalModel: 'matrix',
+  globalModel: 'balance',
   matrixRidge: 0.15,
   localStrength: 1,
-  colourRange: 0.12,
+  colourRange: 0.15,
   shadeSpread: 0.5,
-  smoothing: 0.03,
+  smoothing: 0.1,
   highlightRolloff: true,
 }
 
