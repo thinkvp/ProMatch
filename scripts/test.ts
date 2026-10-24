@@ -11,7 +11,7 @@ import {
   luminance,
 } from '../src/core/color.ts'
 import { DEFAULT_OPTIONS, type MatchOptions, type PairInput, applyModel, crossValidate, disagreeing, fitMatch, reportPairs } from '../src/core/match.ts'
-import { bakeLut, parseCube, sampleLut, toCube } from '../src/core/lut.ts'
+import { bakeLut, parseCube, parseEmbeddedText, sampleLut, sampleLutTetra, toCube, toEmbeddedText } from '../src/core/lut.ts'
 import { sampleDisc } from '../src/core/sample.ts'
 import { analyse } from '../src/core/analysis.ts'
 import { convexHull, insidePolygon, lumaStats, pixelIndices, vectorscope, ycbcr } from '../src/core/scopes.ts'
@@ -204,6 +204,26 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   const id = bakeLut(17, (c) => c)
   sampleLut(id, 0.123, 0.456, 0.789, tmp)
   check('identity LUT samples exactly', Math.abs(tmp[0] - 0.123) + Math.abs(tmp[1] - 0.456) + Math.abs(tmp[2] - 0.789) < 1e-6)
+  sampleLutTetra(id, 0.123, 0.456, 0.789, tmp)
+  check('identity LUT samples exactly (tetrahedral)', Math.abs(tmp[0] - 0.123) + Math.abs(tmp[1] - 0.456) + Math.abs(tmp[2] - 0.789) < 1e-6)
+  // The native effect and the preview interpolate tetrahedrally. A fixed grid
+  // of colours, so the shared PRNG sequence (and later tests) stay unchanged.
+  let worstTetra = 0
+  for (let r = 0.1; r < 0.9; r += 0.07) {
+    for (let g = 0.1; g < 0.9; g += 0.07) {
+      for (let b = 0.1; b < 0.9; b += 0.07) {
+        const c: Vec3 = [r, g, b]
+        sampleLutTetra(lut, r, g, b, tmp)
+        worstTetra = Math.max(worstTetra, deltaE(encodedToOklab(applyModel(model, c)), encodedToOklab(tmp)))
+      }
+    }
+  }
+  const embedded = toEmbeddedText(lut)
+  const unpacked = parseEmbeddedText(embedded)!
+  let embedDiff = 0
+  for (let i = 0; i < lut.data.length; i++) embedDiff = Math.max(embedDiff, Math.abs(lut.data[i] - unpacked.data[i]))
+  check('embedded LUT text round-trips', unpacked.size === 33 && embedDiff * 255 < 0.01, `max ${(embedDiff * 255).toFixed(4)}/255, ${(embedded.length / 1024).toFixed(0)} KB vs .cube ${(toCube(lut, 't').length / 1024).toFixed(0)} KB`)
+  check('33³ LUT reproduces the model (tetrahedral)', worstTetra < 1.5, `worst interpolation ΔE ${worstTetra.toFixed(2)}`)
 }
 
 {

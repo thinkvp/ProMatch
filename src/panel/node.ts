@@ -67,6 +67,17 @@ export function writeText(p: string, text: string): void {
   need(fs).writeFileSync(p, text, 'utf8')
 }
 
+/** Write via a temp file and rename, so a reader (the native effect) never sees half a file. */
+export function writeTextAtomic(p: string, text: string): void {
+  const tmp = `${p}.${process.pid}.tmp`
+  need(fs).writeFileSync(tmp, text, 'utf8')
+  need(fs).renameSync(tmp, p)
+}
+
+export function basename(p: string): string {
+  return need(path).basename(p)
+}
+
 export function writeBytes(p: string, bytes: ArrayBuffer): void {
   need(fs).writeFileSync(p, Buffer.from(bytes))
 }
@@ -122,4 +133,17 @@ export function reveal(p: string): void {
 
 export function safeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'ProMatch'
+}
+
+/** %APPDATA%\ProMatch\luts — what the native ProMatch effect reads, by match ID. */
+export function effectLutPath(id: number): string {
+  return join(ensureDir(join(dataDir(), 'luts')), `${id}.cube`)
+}
+
+/** A fresh match ID (1…9,999,999, exact in the effect's float slider) with no LUT file yet. */
+export function newMatchId(): number {
+  for (;;) {
+    const id = 1 + Math.floor(Math.random() * 9999998)
+    if (!hasNode || !exists(effectLutPath(id))) return id
+  }
 }

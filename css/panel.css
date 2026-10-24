@@ -409,7 +409,7 @@ details.sub .sliders { margin-top: 6px; }
 }
 .action-bar #lut-name { flex: 1; min-width: 60px; }
 .action-bar #lut-size { width: 58px; }
-.action-bar #export { padding: 3px 14px; }
+.action-bar #apply { padding: 3px 14px; }
 
 /* ------------------------------------------------------------ dev + log */
 

@@ -3,7 +3,8 @@
 A Premiere Pro panel for matching the colour of one camera angle to another on multicam
 interviews. You click the same things in both shots (the wall, the interviewee's skin, a red
 apple on the table) and ProMatch works out how to turn the target camera's colours into the
-source camera's. It shows you the result live, then saves it as a `.cube` LUT for Lumetri.
+source camera's. It shows you the result live, then puts it on the clip in one click (its own
+**ProMatch** effect), and saves it as a `.cube` LUT too.
 
 ## Install (dev)
 
@@ -48,11 +49,13 @@ switch the point off and compare.
 4. **Check.** Use **Before / Split / After** in the toolbar. Choose **Target** to show just
    that frame while you work in the **Settings** tab; the frames stay pinned at the top as you
    scroll.
-5. **Export LUT.** The file goes to a `ProMatch LUTs` folder beside the `.prproj`, so it moves
-   and gets backed up with the project. A project that has never been saved falls back to
-   `Documents\ProMatch LUTs\`. The path is copied. In Lumetri Color go to
-   **Basic Correction ▸ Input LUT ▸ Browse…** and paste the path.
-   **Add Lumetri to selected clips** saves a step.
+5. **Apply.** Select the target camera's clip(s) in the Timeline and press **Apply**. ProMatch adds
+   its **ProMatch** effect (Effect Controls: *Match ID*, *Amount*) or reuses the one already there.
+   After more tuning press **Apply** again: every clip in the open sequence using this match
+   updates in place, selected or not. The LUT is also saved to a `ProMatch LUTs` folder beside the `.prproj`, so it moves and
+   gets backed up with the project (`Documents\ProMatch LUTs\` for a project never saved), for
+   Lumetri or other apps. If the ProMatch effect isn't installed, Apply saves the LUT and shows the
+   Lumetri **Input LUT ▸ Browse…** steps instead.
 
 **Points:** click to place a point at the default size, or press and drag out to draw it at
 any size (handy for a large flat area like a wall or a cheek). Drag inside a point to move it
@@ -154,7 +157,18 @@ npm run fixtures
 This writes two synthetic frames to `fixtures/`: the same room seen by a wide camera A and a
 tighter, darker, warmer camera B. Serve the folder (e.g. `python -m http.server`), open
 `index.html`, and load the two frames with **Open…**. Capture and Lumetri buttons are disabled
-outside Premiere, and **Export LUT** downloads the file instead.
+outside Premiere, and **Apply** downloads the LUT instead.
+
+## The ProMatch effect
+
+A small native effect (C++, the After Effects effect API, which Premiere hosts) in `native/`. It
+applies the match with tetrahedral interpolation, 8-bit and 32-bit, blended by *Amount*. The LUT
+is stored **inside the effect**, so it is saved with the project and opens matched on another
+computer that has the effect installed, with nothing to copy. Each Apply replaces it, which
+re-renders. On the test interview Premiere's result matches the panel's After view to 0.44/255,
+all of it from Premiere rendering the clip slightly differently once the effect is on it; from the
+effect's own input the LUT is exact. Media Encoder exports are pixel-identical to the Program
+Monitor (spikes P7–P9). Build and install: `native/PLAN.md`.
 
 ## Not verified yet
 
@@ -163,11 +177,7 @@ and are listed in [spikes/SPIKES.md](spikes/SPIKES.md). Run them and record the 
 
 ## Roadmap
 
-- **One-click apply.** If spike P5 shows Lumetri's LUT can be set from script, Export can apply
-  it directly. If it can't, the clean route is a small native effect (AE/Premiere SDK, C++),
-  "ProMatch Apply", which reads the `.cube` by ID. That also gives live updates and an amount
-  slider. It needs Visual Studio Build Tools and the Adobe After Effects SDK, neither of which
-  is on this machine yet.
+- **Multicam target.** Apply to the angle's clip inside the multicam source sequence directly.
 - **Multicam angle capture.** Enumerate the angles of the selected multicam clip and capture
   each one directly, without switching angles by hand.
 - **Shot-to-shot.** Save a match per camera pair and reapply it across interviews shot with the

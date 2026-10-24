@@ -96,3 +96,25 @@ export const selection = () => call<SelectedClip[]>('PM_selection')
 export const addLumetri = () => call<{ added: number; failed: string[] }>('PM_addLumetri')
 export const dumpEffects = () => call<EffectDump>('PM_dumpEffects')
 export const trySetLut = (params: string[], value: string | number) => call<LutSpike>('PM_trySetLut', { params, value })
+
+export interface ApplyResult {
+  /** The ProMatch effect is not installed (Premiere did not find it by name). */
+  missingEffect: boolean
+  /** Only for build-1 effects, which re-render through a Revision slider. */
+  revision?: number | null
+  clips: Array<{
+    name: string
+    track: number
+    added: boolean
+    previousId: number
+    /** The LUT is stored in the effect (saved with the project), not only read from AppData. */
+    embedded: boolean
+    /** Why it was not embedded. */
+    lutNote: string | null
+    lumetriBefore: boolean
+  }>
+  failed?: string[]
+}
+
+/** `lut`: the effect's embedded-LUT text (toEmbeddedText in core/lut.ts). */
+export const applyMatch = (id: number, lut: string) => call<ApplyResult>('PM_applyMatch', { id, lut })

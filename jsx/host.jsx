@@ -165,7 +165,8 @@ function PM_addLumetri() {
         if (!sel.length) throw new Error("Select the target camera's clip(s) in the Timeline first.");
         app.enableQE();
         var fx = qe.project.getVideoEffectByName("Lumetri Color");
-        if (!fx) throw new Error("Lumetri Color effect not found by name (non-English Premiere?).");
+        // QE returns an empty dummy (name "") for an unknown name, not null.
+        if (!fx || !fx.name) throw new Error("Lumetri Color effect not found by name (non-English Premiere?).");
         var added = 0;
         var failed = [];
         for (var i = 0; i < sel.length; i++) {
@@ -179,6 +180,155 @@ function PM_addLumetri() {
         }
         return { added: added, failed: failed };
     }, "");
+}
+
+/* -------------------------------------------------- native ProMatch effect */
+
+var PM_EFFECT_NAME = "ProMatch";
+/** Contained in the component matchName (Premiere prefixes AE effects with "AE."). */
+var PM_EFFECT_MATCH = "PRMT ProMatch";
+
+function _pmFindEffect(clip) {
+    for (var i = 0; i < clip.components.numItems; i++) {
+        var comp = clip.components[i];
+        if (String(comp.matchName).indexOf(PM_EFFECT_MATCH) !== -1) return { comp: comp, index: i };
+    }
+    return null;
+}
+
+function _pmParam(comp, name) {
+    for (var p = 0; p < comp.properties.numItems; p++) {
+        if (String(comp.properties[p].displayName) === name) return comp.properties[p];
+    }
+    return null;
+}
+
+/** Every video clip in the sequence carrying a ProMatch effect with Match ID `id`. */
+function _pmClipsWithMatch(seq, id) {
+    var out = [];
+    for (var t = 0; t < seq.videoTracks.numTracks; t++) {
+        var track = seq.videoTracks[t];
+        for (var c = 0; c < track.clips.numItems; c++) {
+            var clip = track.clips[c];
+            var fx = _pmFindEffect(clip);
+            if (!fx) continue;
+            var mid = _pmParam(fx.comp, "Match ID");
+            if (mid && Math.round(Number(mid.getValue())) === id) out.push({ clip: clip, track: t, index: c });
+        }
+    }
+    return out;
+}
+
+/** Is there a Lumetri Color before (so applied before) the ProMatch effect? */
+function _pmLumetriBefore(clip, fxIndex) {
+    for (var i = 0; i < fxIndex; i++) {
+        if (String(clip.components[i].matchName).indexOf("Lumetri") !== -1) return true;
+    }
+    return false;
+}
+
+/**
+ * One-click apply. The panel has already written %APPDATA%\ProMatch\luts\<id>.cube.
+ * Selected video clips get a ProMatch effect (added if missing, reused if
+ * present) set to Match ID `id`. Every clip in the sequence already using
+ * `id` is updated too. All of them get one new Revision, which is what makes
+ * Premiere drop its cached frames and re-render.
+ */
+function PM_applyMatch(argJson) {
+    return _pmWrap(function (a) {
+        var id = Math.round(Number(a.id));
+        if (!(id > 0)) throw new Error("Bad match id.");
+        var seq = app.project.activeSequence;
+        if (!seq) throw new Error("No active sequence.");
+        var sel = _pmSelectedVideo(seq);
+        var existing = _pmClipsWithMatch(seq, id);
+        if (!sel.length && !existing.length) {
+            throw new Error("Select the target camera's clip(s) in the Timeline first.");
+        }
+
+        // Add the effect where it is missing.
+        var added = [];
+        var failed = [];
+        var qeFx = null;
+        for (var i = 0; i < sel.length; i++) {
+            if (_pmFindEffect(sel[i].clip)) continue;
+            if (!qeFx) {
+                app.enableQE();
+                qeFx = qe.project.getVideoEffectByName(PM_EFFECT_NAME);
+                if (!qeFx || !qeFx.name) return { missingEffect: true, clips: [] };
+            }
+            var it = _pmQeItem(sel[i].track, sel[i].index);
+            if (!it) {
+                failed.push(sel[i].clip.name);
+                continue;
+            }
+            if (it.addVideoEffect(qeFx) === false) {
+                failed.push(sel[i].clip.name);
+                continue;
+            }
+            added.push(sel[i].track + ":" + sel[i].index);
+        }
+
+        // Targets: selection + clips already on this id, without duplicates.
+        var targets = [];
+        var all = sel.concat(existing);
+        for (var k = 0; k < all.length; k++) {
+            var dup = false;
+            for (var m = 0; m < targets.length; m++) {
+                if (targets[m].track === all[k].track && targets[m].index === all[k].index) dup = true;
+            }
+            if (!dup && _pmFindEffect(all[k].clip)) targets.push(all[k]);
+        }
+
+        // Build 1 of the effect re-rendered via a Revision slider: one new
+        // value for all of them, above any they have now. Build 2+ embeds the
+        // LUT instead, and setting it re-renders by itself.
+        var rev = null;
+        for (var r = 0; r < targets.length; r++) {
+            var rp = _pmParam(_pmFindEffect(targets[r].clip).comp, "Revision");
+            if (rp) rev = Math.max(rev === null ? 0 : rev, Math.round(Number(rp.getValue())));
+        }
+        if (rev !== null) rev = (rev + 1) % 9999999;
+
+        var clips = [];
+        for (var q = 0; q < targets.length; q++) {
+            var clip = targets[q].clip;
+            var fx = _pmFindEffect(clip);
+            var midP = _pmParam(fx.comp, "Match ID");
+            var revP = _pmParam(fx.comp, "Revision");
+            var lutP = _pmParam(fx.comp, "LUT");
+            var before = Math.round(Number(midP.getValue()));
+            var embedded = false;
+            var lutNote = lutP ? null : "no LUT parameter";
+            if (lutP && a.lut) {
+                try {
+                    lutP.setValue(a.lut, true);
+                    // Premiere stores the string as-is (UTF-16) without calling the
+                    // effect's scan callback; the effect decodes it when rendering.
+                    // Read it back to confirm the whole text was stored.
+                    var back = String(lutP.getValue());
+                    embedded = back === a.lut;
+                    if (!embedded) lutNote = "read back " + back.length + " chars: " + back.substring(0, 24);
+                } catch (e5) {
+                    lutNote = String(e5);
+                }
+            }
+            midP.setValue(id, true);
+            if (revP) revP.setValue(rev, true);
+            var wasAdded = false;
+            for (var x = 0; x < added.length; x++) if (added[x] === targets[q].track + ":" + targets[q].index) wasAdded = true;
+            clips.push({
+                name: clip.name,
+                track: targets[q].track + 1,
+                added: wasAdded,
+                previousId: before,
+                embedded: embedded,
+                lutNote: lutNote,
+                lumetriBefore: _pmLumetriBefore(clip, fx.index)
+            });
+        }
+        return { missingEffect: false, revision: rev, clips: clips, failed: failed };
+    }, argJson);
 }
 
 /** Describe a parameter value fully enough to compare a hand-set Lumetri with

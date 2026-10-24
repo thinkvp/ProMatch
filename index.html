@@ -20,7 +20,7 @@
                 <li data-step="source"><span class="n">1</span>Source</li>
                 <li data-step="target"><span class="n">2</span>Target</li>
                 <li data-step="points"><span class="n">3</span>Points</li>
-                <li data-step="export"><span class="n">4</span>Export</li>
+                <li data-step="export"><span class="n">4</span>Apply</li>
             </ol>
             <span id="status" class="status" role="status"></span>
         </header>
@@ -209,8 +209,7 @@
                 <option value="65">65³</option>
                 <option value="17">17³</option>
             </select>
-            <button id="add-lumetri" class="icon-btn fx" data-needs-host title="Add Lumetri Color to the clips selected in the Timeline">fx</button>
-            <button id="export" class="primary">Export LUT</button>
+            <button id="apply" class="primary" title="Put the match on the clips selected in the Timeline (ProMatch effect), or update the clips already using it. Also saves the .cube beside the project.">Apply</button>
         </footer>
 
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/tiff" hidden>

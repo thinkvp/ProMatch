@@ -14,6 +14,9 @@ observed by just using the panel.
 | P3 | Multicam: in the edited sequence, does the export show the active angle? | Lets the user capture A and B by switching angles at one playhead | Capture from inside the multicam source sequence with the other tracks hidden |
 | P4 | QE `addVideoEffect(getVideoEffectByName("Lumetri Color"))` lands on the right clip when the track has gaps | DOM clip index → QE item index skips "Empty" items | Add Lumetri by hand |
 | P5 | **Can script set Lumetri's Input LUT / Look to a file path?** (`PM_trySetLut`) | YES = **Export LUT** can become one-click apply | Manual Browse… (current behaviour), or the native effect in the README roadmap |
+| P7 | The native ProMatch effect (`native/`) renders the LUT the same way: its frame matches the software LUT | Risk 2 in `native/PLAN.md`: an AE-API effect may get other pixel values than Lumetri under colour management, especially in 32-bit | Note the format and values it gets (`effect.log`) |
+| P8 | Does **Apply** after more tuning update the picture (Revision bump), in the Program Monitor and in exports? | Risk 3: Premiere caches rendered frames by parameter values, not by the LUT file | A visible parameter the user nudges |
+| P9 | Can the effect carry the LUT itself (an arbitrary-data parameter set from script), so a project opens matched on another machine? | Phase 2 of `native/PLAN.md`: portability, and no Revision slider | Keep reading `%APPDATA%\ProMatch\luts` and copy the LUTs by hand |
 | P6 | Lumetri reads our `.cube` (TITLE, DOMAIN_MIN/MAX, sizes 17/33/65) and the result in the Program Monitor matches the panel's **After** view | Confirms the LUT is applied in the encoding the engine assumes (display-referred Rec.709) | If it differs, the sequence's colour management is converting first — note the settings here |
 
 ## Results
@@ -31,6 +34,9 @@ The panel was driven over its DevTools port with `node scripts/cdp.mjs "<expr>"`
 | P4 | **PASS** | "Added Lumetri Color to 1 clip(s)" on C0773.MP4. Tested on one clip only; a track with gaps is not covered. |
 | P5 | PARTIAL, open | See below. |
 | P6 | **PASS** | Same frame: Premiere's Input LUT result matches the panel's software prediction to 0.27/255 (S-Log3 media, gamma 2.2 project). See below. |
+| P7 | **PASS** | The native ProMatch effect, applied by **Apply**: Premiere's frame matches the panel's software LUT to **0.44/255** on the same frame (max 4, no value off by more than 3). See below. |
+| P9 | **PASS** | The LUT is embedded in the effect and saved with the project: after save + restart it renders with no AppData file, exact to the software LUT (max 1/255). See below. |
+| P8 | **PASS** | Re-apply after tuning re-renders in place through the Revision bump; rewriting the LUT file without a bump does not. See below. |
 
 **P5 detail (first run, broad spike — tried every param matching /LUT\|Look/).** On a fresh Lumetri:
 
@@ -153,6 +159,69 @@ Also found in this run:
   The contrast stage fitted 1.84, left the matrix close to plain white balance, and brought the
   mean to 1.93. `npx tsx scripts/match-session.ts` re-runs a saved session offline and writes
   `captures/compare.png`.
+
+**Native effect P7 + P8 (2026-10-24, Premiere 26.3.2, same clip and frame).** The test Lumetri was
+deleted from C0773 first (with the user's OK), so the before frame is ungraded.
+- **Loading.** `ProMatch.aex` (AE effect API, built with the AE SDK, see `native/`) loads from the
+  MediaCore junction after a Premiere restart: `effect.log` shows `GlobalSetup host=PrMr api=13.4`, and
+  ProMatch is in `qe.project.getVideoEffectList()` (150 effects). Gotcha:
+  **`qe.project.getVideoEffectByName()` never returns null.** For an unknown name it returns an empty
+  object whose `name` is `""`, and `addVideoEffect` then returns `false`. Check `.name`.
+- **Apply.** One click added the effect to the selected C0773 (matchName `AE.PRMT ProMatch`) and set
+  `Match ID` 1168498 and `Revision` 1. The **Revision** param is hidden in the UI (`PF_PUI_INVISIBLE`) but
+  scripting still lists it, reads it and sets it.
+- **Pixel format (risk 2).** Premiere renders the effect both as **BGRA_4444_32f** and as BGRA_4444_8u around
+  each capture; which of the two produced the captured frame is not established. Rows are bottom-up (`rowbytes` -30720 / -7680).
+- **P7 PASS.** Same frame (00:03:30:03), capture without the effect vs with it: the effect moved values by
+  25.8/255 on average. Premiere's frame vs the same `.cube` applied in software to the before capture:
+  **0.44/255 mean**, max 4, 5% of values off by more than 1, **none off by more than 3**. By brightness
+  (dark → bright): 0.21, 0.40, 0.57, 0.53, 0.56. **The gap is not the LUT.** With the effect at Amount 0
+  (in the chain, changing nothing) the capture already differs from the no-effect frame by 0.40/255 (max 4):
+  Premiere renders the clip slightly differently once a CPU-only effect is on it, probably by using its
+  software path instead of the GPU. Predicted from that Amount 0 frame (the effect's real input),
+  Premiere's output equals the software LUT: **mean 0.000, max 1**. Amount 50% vs prediction: 0.48/255
+  (same input gap). A GPU render path for the effect might remove the 0.4; it isn't visible as it is.
+  The panel preview and `applyLutToPixels` were switched from trilinear to **tetrahedral**, the effect's
+  interpolation, so the After view is what Apply renders. On the real LUT the two differ by 0.064/255 on
+  average, but by up to 5/255 on a steep synthetic LUT. Tetrahedral is also closer to the model
+  (worst ΔE 0.31 vs 0.51 on the 33³ test).
+- **P8 PASS.** With +0.5 stop exposure in the panel, rewriting `<id>.cube` **without** a Revision bump left
+  the capture pixel-identical to the old one (Premiere served its cached frame). Then **Apply** (same ID,
+  Revision 2) matched the tuned LUT in software to 0.51/255 (max 5, none off by more than 3). Setting it back and
+  applying again (Revision 3) was pixel-identical to the first result.
+- Gotcha: **QE `exportFramePNG` needs backslashes.** A forward-slash path throws "Unknown error exception".
+- Engine check offline (`scripts/native-check.ts`): the C++ engine equals the TypeScript tetrahedral
+  reference to ±1 rounding, 8u and 32f, at Amount 1 and 0.5; 1080p in 4.6 ms on this PC.
+- **Exports (P8).** One frame (in/out set on 00:03:30:03, then restored to unset):
+  `Sequence.exportAsMediaDirect` with the PNG Sequence preset took 0.8 s, and **Media Encoder**
+  (`app.encoder.encodeSequence` + `startBatch`) loaded its own copy of the effect (a second
+  `GlobalSetup` in `effect.log`, rendering BGRA 8u). Both frames are **pixel-identical** to the Program
+  Monitor capture. Gotcha: with a wrong preset path `encodeSequence` still returns a job ID and AME's
+  queue just resumes and stops; `exportAsMediaDirect` reports "Preset file doesn't exist".
+
+**Native effect P9: embedded LUT (2026-10-24, builds 2 and 3, same clip and frame).** The effect got
+an arbitrary-data parameter "LUT" (no UI, can't be keyframed), and Revision was dropped: Premiere shows
+`PF_PUI_INVISIBLE` params anyway, so build 1's Revision slider was visible in Effect Controls.
+- **How Premiere fills it (build 2 probe, every callback logged).** `component.properties[i].setValue(string)`
+  on the arb param does **not** call the effect's SCAN callback. Premiere stores the JS string itself as the
+  data, **UTF-16LE, no terminator** (287,528 chars → `UNFLATTEN` of 575,056 bytes), and `getValue()` returns
+  it unchanged (no PRINT call). So a read-back proves storage, not parsing. Build 2 expected its own
+  binary format, rejected the bytes and quietly fell back to the AppData file.
+- **Build 3** keeps those bytes as they are and decodes them when rendering (cached by a content hash). The
+  text is `PMLUT1 <size> <lo> <hi> <base64 of uint16 LE>` (`toEmbeddedText` in `src/core/lut.ts`): 281 KB
+  for 33³ (the .cube is 948 KB), 0.002/255 from the .cube. The effect accepts ASCII too, for hosts that do
+  call SCAN.
+- **Save + reopen:** the project saved with build 2's instance reopened under build 3 with
+  `lut=embedded 33` on its first renders.
+- **No AppData file** (every `.cube` moved out of `%APPDATA%\ProMatch\luts`): at 100% Premiere equals the
+  software LUT applied to the effect's input (the Amount 0 frame), **mean 0.000, max 1**. At Amount 50% (a fresh
+  render), max 1/255.
+- **Re-apply without Revision:** +0.5 stop then Apply changed the frame by 10.8/255 and matched the tuned LUT
+  exactly (max 1). Setting it back and applying was pixel-identical to the earlier capture. Setting
+  the text is a parameter change, so Premiere re-renders.
+- **65³** (2.2 MB of text through `evalScript` and `setValue`): Apply 0.59 s (33³: 0.14 s), render exact (max 1).
+- **Exports** read the LUT from the project, too: a one-frame `exportAsMediaDirect` and a Media Encoder export
+  (AME loaded build 3 itself, `lut=embedded 33`) are both pixel-identical to the Program Monitor capture.
 
 ### Premiere Pro 25.x (2025)
 
