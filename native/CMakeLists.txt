@@ -24,19 +24,28 @@ target_link_libraries(lutapply pm_lut)
 set_target_properties(lutapply PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/build/bin)
 
 # ---------------------------------------------------------------- the effect
-# The SDK's folder layout varies by release; find the Headers dir that holds
-# AE_Effect.h, anywhere under native/sdk.
-file(GLOB_RECURSE PM_AE_EFFECT_H ${CMAKE_CURRENT_SOURCE_DIR}/sdk/*/AE_Effect.h)
+# The Adobe SDKs (gitignored), each unzipped as downloaded:
+#   native/sdk/aesdk  After Effects SDK: the effect API, PiPLtool
+#   native/sdk/prsdk  Premiere Pro SDK: its GPU filter API (not used yet)
+set(PM_AE_SDK ${CMAKE_CURRENT_SOURCE_DIR}/sdk/aesdk CACHE PATH "After Effects SDK folder")
+set(PM_PR_SDK ${CMAKE_CURRENT_SOURCE_DIR}/sdk/prsdk CACHE PATH "Premiere Pro SDK folder")
+
+# The SDK's inner layout varies by release (currently Examples/Headers): find
+# the Headers dir that holds AE_Effect.h, skipping the sample projects.
+file(GLOB_RECURSE PM_AE_EFFECT_H ${PM_AE_SDK}/*/AE_Effect.h)
 list(FILTER PM_AE_EFFECT_H EXCLUDE REGEX "/(Effect|AEGP|GP)/")
 if(NOT PM_AE_EFFECT_H)
-  message(WARNING "Adobe After Effects SDK not found under native/sdk: building the engine test only.")
+  message(WARNING "After Effects SDK not found in ${PM_AE_SDK}: building the engine test only.")
   return()
 endif()
 list(GET PM_AE_EFFECT_H 0 PM_FIRST)
 get_filename_component(PM_SDK_HEADERS ${PM_FIRST} DIRECTORY)
 get_filename_component(PM_SDK_ROOT ${PM_SDK_HEADERS} DIRECTORY)
-find_program(PM_PIPLTOOL PiPLtool PATHS ${PM_SDK_ROOT}/Resources ${PM_SDK_ROOT}/Examples/Resources NO_DEFAULT_PATH REQUIRED)
+find_program(PM_PIPLTOOL PiPLtool PATHS ${PM_SDK_ROOT}/Resources NO_DEFAULT_PATH NO_CACHE REQUIRED)
 message(STATUS "AE SDK headers: ${PM_SDK_HEADERS}")
+if(EXISTS ${PM_PR_SDK}/Examples/Headers/PrSDKGPUFilter.h)
+  message(STATUS "Premiere Pro SDK: ${PM_PR_SDK}")
+endif()
 
 # PiPL: preprocess the .r, convert with PiPLtool, preprocess again, then rc.
 set(PM_R ${CMAKE_CURRENT_SOURCE_DIR}/src/ProMatchPiPL.r)
@@ -51,10 +60,67 @@ add_custom_command(
   COMMENT "Building PiPL resource"
   VERBATIM)
 
-add_library(ProMatch MODULE src/ProMatch.cpp ${PM_RC})
+# ------------------------------------------------------------ GPU filter
+# Premiere's GPU effect API (Premiere Pro SDK): ProMatch_GPU.cpp, with the
+# CUDA kernel compiled to PTX by nvcc (CUDA Toolkit, build machine only) and
+# the OpenCL kernel embedded as source. Without the Premiere SDK the effect
+# is CPU-only; without nvcc the GPU filter declines CUDA devices.
+set(PM_GPU_OBJECTS)
+if(EXISTS ${PM_PR_SDK}/Examples/Headers/PrSDKGPUFilter.h)
+  set(PM_GEN ${CMAKE_CURRENT_BINARY_DIR}/gen)
+  set(PM_KERNELS ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels)
+  add_custom_command(
+    OUTPUT ${PM_GEN}/ProMatchLut_cl.h
+    COMMAND ${CMAKE_COMMAND} -DIN=${PM_KERNELS}/ProMatchLut.cl -DOUT=${PM_GEN}/ProMatchLut_cl.h -DNAME=kProMatchLutCl
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/embed.cmake
+    DEPENDS ${PM_KERNELS}/ProMatchLut.cl ${CMAKE_CURRENT_SOURCE_DIR}/embed.cmake
+    VERBATIM)
+  set(PM_GEN_HEADERS ${PM_GEN}/ProMatchLut_cl.h)
+
+  # CUDA_PATH, else the toolkit's default folder (newest version first), for
+  # shells started before the toolkit was installed.
+  file(GLOB PM_CUDA_BINS "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*/bin")
+  list(SORT PM_CUDA_BINS COMPARE NATURAL ORDER DESCENDING)
+  find_program(PM_NVCC nvcc HINTS $ENV{CUDA_PATH}/bin ${PM_CUDA_BINS} NO_CACHE)
+  set(PM_HAS_CUDA 0)
+  if(PM_NVCC)
+    set(PM_HAS_CUDA 1)
+    # compute_75 PTX: the driver JIT-compiles it for any newer GPU (Turing+).
+    add_custom_command(
+      OUTPUT ${PM_GEN}/ProMatchLut_ptx.h
+      COMMAND "${PM_NVCC}" -ptx -arch=compute_75 -O3 -o ${PM_GEN}/ProMatchLut.ptx ${PM_KERNELS}/ProMatchLut.cu
+      COMMAND ${CMAKE_COMMAND} -DIN=${PM_GEN}/ProMatchLut.ptx -DOUT=${PM_GEN}/ProMatchLut_ptx.h -DNAME=kProMatchLutPtx
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/embed.cmake
+      DEPENDS ${PM_KERNELS}/ProMatchLut.cu ${CMAKE_CURRENT_SOURCE_DIR}/embed.cmake
+      COMMENT "nvcc: ProMatchLut.cu -> PTX"
+      VERBATIM)
+    list(APPEND PM_GEN_HEADERS ${PM_GEN}/ProMatchLut_ptx.h)
+    message(STATUS "GPU filter: CUDA (${PM_NVCC}) + OpenCL")
+  else()
+    message(STATUS "GPU filter: OpenCL only (no nvcc; install the CUDA Toolkit for CUDA)")
+  endif()
+
+  add_library(pm_gpu OBJECT src/ProMatch_GPU.cpp ${PM_GEN_HEADERS})
+  # Premiere's headers first: its PrSDKAESupport.h differs from the AE SDK's.
+  target_include_directories(pm_gpu PRIVATE
+    ${PM_GEN} ${PM_PR_SDK}/Examples/Headers ${PM_PR_SDK}/Examples/Projects/GPUVideoFilter/Utils
+    ${PM_SDK_HEADERS} ${PM_SDK_HEADERS}/SP ${PM_SDK_HEADERS}/adobesdk src)
+  target_compile_definitions(pm_gpu PRIVATE PM_HAS_CUDA=${PM_HAS_CUDA})
+  target_compile_options(pm_gpu PRIVATE /wd4005)  # PrSDKTypes.h redefines NOMINMAX
+  set(PM_GPU_OBJECTS $<TARGET_OBJECTS:pm_gpu>)
+
+  # Kernel check on this PC's GPU against the CPU engine (no Premiere needed).
+  add_executable(gputest test/gputest.cpp ${PM_GEN_HEADERS})
+  target_include_directories(gputest PRIVATE ${PM_GEN} src)
+  target_compile_definitions(gputest PRIVATE PM_HAS_CUDA=${PM_HAS_CUDA})
+  target_link_libraries(gputest pm_lut)
+  set_target_properties(gputest PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/build/bin)
+endif()
+
+add_library(ProMatch MODULE src/ProMatch.cpp ${PM_RC} ${PM_GPU_OBJECTS})
 target_include_directories(ProMatch PRIVATE
   ${PM_SDK_HEADERS} ${PM_SDK_HEADERS}/SP ${PM_SDK_HEADERS}/Win ${PM_SDK_HEADERS}/adobesdk
-  ${PM_SDK_ROOT}/Util ${PM_SDK_ROOT}/Examples/Util)
+  ${PM_SDK_ROOT}/Util)
 target_compile_definitions(ProMatch PRIVATE MSWindows WIN32 _WINDOWS)
 target_link_libraries(ProMatch PRIVATE pm_lut shell32 ole32)
 set_target_properties(ProMatch PROPERTIES

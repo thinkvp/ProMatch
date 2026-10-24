@@ -9,9 +9,14 @@
 #define PM_MAJOR 1
 #define PM_MINOR 0
 #define PM_BUG   0
-#define PM_BUILD 3
+#define PM_BUILD 6
 // PF_VERSION(1, 0, 0, PF_Stage_DEVELOP, PM_BUILD); must equal AE_Effect_Version in the PiPL.
-#define PM_VERSION_PACKED 524291
+#define PM_VERSION_PACKED 524294
+
+// Parameter indices (0 is the input layer). The GPU filter reads them too.
+#define PM_PARAM_MATCH_ID 1
+#define PM_PARAM_AMOUNT   2
+#define PM_PARAM_LUT      3
 
 // Global out flags. PiPL and GlobalSetup must agree, or After Effects
 // refuses the plug-in.

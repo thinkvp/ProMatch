@@ -31,9 +31,9 @@
 
 enum {
     PM_INPUT = 0,
-    PM_MATCH_ID,
-    PM_AMOUNT,
-    PM_LUT,
+    PM_MATCH_ID = PM_PARAM_MATCH_ID,
+    PM_AMOUNT = PM_PARAM_AMOUNT,
+    PM_LUT = PM_PARAM_LUT,
     PM_NUM_PARAMS
 };
 

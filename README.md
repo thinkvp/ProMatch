@@ -165,10 +165,10 @@ A small native effect (C++, the After Effects effect API, which Premiere hosts) 
 applies the match with tetrahedral interpolation, 8-bit and 32-bit, blended by *Amount*. The LUT
 is stored **inside the effect**, so it is saved with the project and opens matched on another
 computer that has the effect installed, with nothing to copy. Each Apply replaces it, which
-re-renders. On the test interview Premiere's result matches the panel's After view to 0.44/255,
-all of it from Premiere rendering the clip slightly differently once the effect is on it; from the
-effect's own input the LUT is exact. Media Encoder exports are pixel-identical to the Program
-Monitor (spikes P7–P9). Build and install: `native/PLAN.md`.
+re-renders. It renders on the GPU (CUDA; OpenCL too) when Premiere's renderer is GPU-accelerated,
+and on the CPU otherwise. On the test interview, the GPU render matches the panel's After view to
+0.25/255 (the CPU render to 0.44/255), and Media Encoder exports are pixel-identical to the Program
+Monitor (spikes P7–P10). Build and install: `native/PLAN.md`.
 
 ## Not verified yet
 

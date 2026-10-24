@@ -16,6 +16,7 @@ observed by just using the panel.
 | P5 | **Can script set Lumetri's Input LUT / Look to a file path?** (`PM_trySetLut`) | YES = **Export LUT** can become one-click apply | Manual Browse… (current behaviour), or the native effect in the README roadmap |
 | P7 | The native ProMatch effect (`native/`) renders the LUT the same way: its frame matches the software LUT | Risk 2 in `native/PLAN.md`: an AE-API effect may get other pixel values than Lumetri under colour management, especially in 32-bit | Note the format and values it gets (`effect.log`) |
 | P8 | Does **Apply** after more tuning update the picture (Revision bump), in the Program Monitor and in exports? | Risk 3: Premiere caches rendered frames by parameter values, not by the LUT file | A visible parameter the user nudges |
+| P10 | Can the effect render on the GPU (Premiere's GPU filter API), reading the embedded LUT? | Playback without GPU→CPU→GPU copies; the CPU path also shifts the input by 0.4/255 (P7) | CPU path only |
 | P9 | Can the effect carry the LUT itself (an arbitrary-data parameter set from script), so a project opens matched on another machine? | Phase 2 of `native/PLAN.md`: portability, and no Revision slider | Keep reading `%APPDATA%\ProMatch\luts` and copy the LUTs by hand |
 | P6 | Lumetri reads our `.cube` (TITLE, DOMAIN_MIN/MAX, sizes 17/33/65) and the result in the Program Monitor matches the panel's **After** view | Confirms the LUT is applied in the encoding the engine assumes (display-referred Rec.709) | If it differs, the sequence's colour management is converting first — note the settings here |
 
@@ -35,6 +36,7 @@ The panel was driven over its DevTools port with `node scripts/cdp.mjs "<expr>"`
 | P5 | PARTIAL, open | See below. |
 | P6 | **PASS** | Same frame: Premiere's Input LUT result matches the panel's software prediction to 0.27/255 (S-Log3 media, gamma 2.2 project). See below. |
 | P7 | **PASS** | The native ProMatch effect, applied by **Apply**: Premiere's frame matches the panel's software LUT to **0.44/255** on the same frame (max 4, no value off by more than 3). See below. |
+| P10 | **PASS** | GPU path (CUDA) inside the same effect: renders on the GPU in Premiere and Media Encoder, matches the software LUT to **0.25/255** (max 2), and Amount 0 is identical to no effect. See below. |
 | P9 | **PASS** | The LUT is embedded in the effect and saved with the project: after save + restart it renders with no AppData file, exact to the software LUT (max 1/255). See below. |
 | P8 | **PASS** | Re-apply after tuning re-renders in place through the Revision bump; rewriting the LUT file without a bump does not. See below. |
 
@@ -222,6 +224,38 @@ an arbitrary-data parameter "LUT" (no UI, can't be keyframed), and Revision was 
 - **65³** (2.2 MB of text through `evalScript` and `setValue`): Apply 0.59 s (33³: 0.14 s), render exact (max 1).
 - **Exports** read the LUT from the project, too: a one-frame `exportAsMediaDirect` and a Media Encoder export
   (AME loaded build 3 itself, `lut=embedded 33`) are both pixel-identical to the Program Monitor capture.
+
+**Native effect P10: GPU path (2026-10-24, builds 4–6, RTX 4070, driver 617.42).**
+- **Renderers.** `qe.project.getRendererNames()` lists Software Only, CUDA and OpenCL; **no DirectX** on this
+  PC. The project uses **CUDA** (`qe.project.currentRendererName`). The Premiere SDK guide says Premiere
+  dropped OpenCL in 2021 ("entirely CUDA/Metal"), though the option is still listed. So the GPU filter
+  has CUDA and OpenCL kernels and no DirectX one.
+- **How it plugs in.** `ProMatch.aex` also exports `xGPUFilterEntry` (Premiere SDK `PrGPUFilterModule`);
+  Premiere pairs it with the CPU effect in the same file. `Initialize` declines a device it can't run on
+  (then Premiere renders that instance on the CPU). CUDA: `ProMatchLut.cu` compiled to PTX by nvcc
+  (CUDA 13.4, `compute_75`, PTX ISA 9.4) and embedded; OpenCL: `ProMatchLut.cl` embedded as source.
+  Both are reached through `nvcuda.dll` / `OpenCL.dll` at runtime (`native/src/gpu_api.h`), so the
+  plug-in has no new DLL dependencies. A driver too old for the PTX makes the filter decline (logged).
+- **LUT on the GPU side (build 4 probe).** `GetParam` on the arbitrary-data param returns type 10
+  (`kPrParamType_PrMemoryPtr`), the same 575,056 bytes of UTF-16 text, and **a new pointer on every
+  read**, so the plug-in owns it and must `PrDisposePtr` it (build 4 leaked; fixed in build 5). It is
+  read once per GPU instance; Premiere makes a new instance when a parameter changes.
+- **Offline** (`native/build/bin/Release/gputest.exe`, real frame, 33³): CUDA and OpenCL vs the CPU
+  engine are **bit-identical in 32f** and within one half-float step (0.12/255) in 16f, in place and
+  src→dst, Amount 1 and 0.5. Kernel time per 1080p frame: OpenCL 0.10 ms, CUDA about 0.2 ms
+  (CPU engine about 5 ms, plus Premiere's GPU→CPU→GPU copies).
+- **In Premiere (build 6, CUDA renderer):** log `GPU: filter ready on device 0 (CUDA)`, frames 32f, in place.
+  - **Amount 0 is identical** to the clip without the effect (mean 0.000, max 1): the CPU path's 0.40/255
+    shift (P7) is gone, because the frame never leaves the GPU.
+  - **100% vs the software LUT on the no-effect frame: 0.25/255** (max 2, none over 1), down from 0.44 on the
+    CPU path and level with Lumetri's 0.27 (P6). The rest is the GPU working on unrounded float input
+    while the prediction starts from an 8-bit capture. Amount 50%: 0.32 (max 2).
+  - **Re-apply after tuning** (+0.5 stop): the frame changed by 10.7/255 and matched the tuned LUT to 0.29/255
+    (max 2). Back to the original setting: pixel-identical to the first GPU capture.
+  - **Exports:** one-frame `exportAsMediaDirect` and Media Encoder (which loaded build 6 and rendered on CUDA
+    itself) are pixel-identical to the Program Monitor capture.
+- **Not checked:** the OpenCL path inside Premiere (needs the project renderer switched), 16f frames inside
+  Premiere (it only handed this effect 32f), and playback dropped frames, GPU vs CPU path.
 
 ### Premiere Pro 25.x (2025)
 
