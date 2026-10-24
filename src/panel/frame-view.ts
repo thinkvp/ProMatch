@@ -167,7 +167,11 @@ export class FrameView {
     this.vx = 0
     this.vy = 0
     this.updateBadge()
-    this.render()
+    this.layout()
+  }
+
+  private get zoomed(): boolean {
+    return this.zoom > 1.001
   }
 
   layout(): void {
@@ -178,15 +182,22 @@ export class FrameView {
       this.canvas.style.display = 'none'
       return
     }
-    // Fill the box the layout gives this frame, keeping the aspect ratio.
+    // At fit the canvas hugs the picture (aspect kept). Zoomed in, it takes the
+    // frame's whole box, so the space a letterbox would waste shows more of
+    // the picture instead.
     this.fit = Math.min(availW / this.imgW, availH / this.imgH)
-    this.cssW = Math.round(this.imgW * this.fit)
-    this.cssH = Math.round(this.imgH * this.fit)
+    this.cssW = this.zoomed ? availW : Math.round(this.imgW * this.fit)
+    this.cssH = this.zoomed ? availH : Math.round(this.imgH * this.fit)
+    const devW = Math.round(this.cssW * dpr)
+    const devH = Math.round(this.cssH * dpr)
     this.canvas.style.display = 'block'
     this.canvas.style.width = `${this.cssW}px`
     this.canvas.style.height = `${this.cssH}px`
-    this.canvas.width = Math.round(this.cssW * dpr)
-    this.canvas.height = Math.round(this.cssH * dpr)
+    // Resizing a canvas clears it; only do it when the size really changes.
+    if (this.canvas.width !== devW || this.canvas.height !== devH) {
+      this.canvas.width = devW
+      this.canvas.height = devH
+    }
     this.clampView()
     this.render()
   }
@@ -196,11 +207,11 @@ export class FrameView {
     return this.fit * this.zoom
   }
 
+  /** Keep the picture covering the view; along an axis it can't cover yet, centre it. */
   private clampView(): void {
-    const spanW = this.cssW / this.s
-    const spanH = this.cssH / this.s
-    this.vx = Math.min(Math.max(this.vx, 0), Math.max(0, this.imgW - spanW))
-    this.vy = Math.min(Math.max(this.vy, 0), Math.max(0, this.imgH - spanH))
+    const axis = (v: number, span: number, size: number) => (span >= size ? (size - span) / 2 : Math.min(Math.max(v, 0), size - span))
+    this.vx = axis(this.vx, this.cssW / this.s, this.imgW)
+    this.vy = axis(this.vy, this.cssH / this.s, this.imgH)
   }
 
   private updateBadge(): void {
@@ -257,15 +268,16 @@ export class FrameView {
   private onWheel(e: WheelEvent): void {
     if (!this.image) return
     e.preventDefault()
-    const r = this.canvas.getBoundingClientRect()
-    const mx = e.clientX - r.left
-    const my = e.clientY - r.top
     const before = this.toImage(e)
+    const wasZoomed = this.zoomed
     const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0018))
     this.zoom = Math.min(MAX_ZOOM, Math.max(1, this.zoom * factor))
+    // Crossing fit <-> zoomed grows or shrinks the canvas, which moves it.
+    if (this.zoomed !== wasZoomed) this.layout()
     // Keep the image point under the cursor where it was.
-    this.vx = before.x - mx / this.s
-    this.vy = before.y - my / this.s
+    const r = this.canvas.getBoundingClientRect()
+    this.vx = before.x - (e.clientX - r.left) / this.s
+    this.vy = before.y - (e.clientY - r.top) / this.s
     this.clampView()
     this.updateBadge()
     this.hover = this.toImage(e)
@@ -362,7 +374,25 @@ export class FrameView {
       c.rect(clipX0, 0, W - clipX0, H)
       c.clip()
     }
-    c.drawImage(src, this.vx * k, this.vy * k, spanW * k, spanH * k, 0, 0, W, H)
+    // The view can extend past the picture (zoomed, but not yet covering an
+    // axis): draw only the part of the picture inside it.
+    const sx0 = Math.max(0, this.vx)
+    const sy0 = Math.max(0, this.vy)
+    const sx1 = Math.min(this.imgW, this.vx + spanW)
+    const sy1 = Math.min(this.imgH, this.vy + spanH)
+    if (sx1 > sx0 && sy1 > sy0) {
+      c.drawImage(
+        src,
+        sx0 * k,
+        sy0 * k,
+        (sx1 - sx0) * k,
+        (sy1 - sy0) * k,
+        ((sx0 - this.vx) / spanW) * W,
+        ((sy0 - this.vy) / spanH) * H,
+        ((sx1 - sx0) / spanW) * W,
+        ((sy1 - sy0) / spanH) * H,
+      )
+    }
     if (clipX0 > 0) c.restore()
   }
 

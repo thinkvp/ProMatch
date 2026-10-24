@@ -371,13 +371,8 @@ input.switch:checked::after { transform: translateX(12px); background: #fff; }
 .slider .reset:hover { color: var(--text); background: none; }
 .slider.changed > span { color: var(--text); }
 
-details.sub { margin-top: 2px; }
-details.sub > summary { cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; user-select: none; width: max-content; }
-details.sub > summary::-webkit-details-marker { display: none; }
-details.sub > summary::after { content: " ▾"; }
-details.sub:not([open]) > summary::after { content: " ▸"; }
-details.sub > summary:hover { color: var(--text); }
-details.sub .sliders { margin-top: 6px; }
+.sub { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.sub-head { margin: 0 0 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 
 .button-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 
@@ -407,6 +402,7 @@ details.sub .sliders { margin-top: 6px; }
     border-top: 1px solid var(--line);
     box-shadow: 0 -6px 12px rgba(0, 0, 0, 0.18);
 }
+.action-bar .bar-label { flex: none; font-size: 11px; color: var(--text-2); white-space: nowrap; }
 .action-bar #lut-name { flex: 1; min-width: 60px; }
 .action-bar #lut-size { width: 58px; }
 .action-bar #apply { padding: 3px 14px; }

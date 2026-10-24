@@ -167,10 +167,10 @@
                         <label class="toggle" title="Cameras with different picture profiles differ more in the shadows than the highlights. Needs points at different brightnesses."><input type="checkbox" class="switch" id="opt-contrast"><span>Match contrast</span></label>
                         <label class="toggle" title="Ease highlights into white instead of clipping them when the match brightens the image."><input type="checkbox" class="switch" id="opt-rolloff"><span>Roll off highlights</span></label>
                         <div id="sliders" class="sliders"></div>
-                        <details class="sub">
-                            <summary>Fine-tune</summary>
+                        <div class="sub">
+                            <h3 class="sub-head">Fine-tune</h3>
                             <div id="sliders-advanced" class="sliders"></div>
-                        </details>
+                        </div>
                     </div>
                 </section>
 
@@ -203,7 +203,8 @@
         </main>
 
         <footer class="action-bar">
-            <input id="lut-name" type="text" spellcheck="false" aria-label="LUT name" title="LUT name (also the file name)">
+            <label for="lut-name" class="bar-label">LUT filename</label>
+            <input id="lut-name" type="text" spellcheck="false" title="Name of the .cube file (saved beside the project)">
             <select id="lut-size" aria-label="LUT size" title="LUT size: 33³ is standard, 65³ is finest, 17³ is smallest">
                 <option value="33">33³</option>
                 <option value="65">65³</option>
