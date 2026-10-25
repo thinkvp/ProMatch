@@ -68,6 +68,22 @@ static std::vector<float> cpuRef(const pm::Lut3D& lut, std::vector<float> px, in
     return px;
 }
 
+// The calibration pattern as the CPU effect draws it, for the same frame size.
+static const int kProbe = 17;
+static std::vector<float> probeRef(int w, int h, bool half) {
+    std::vector<float> px(size_t(w) * h * 4);
+    pm::fillProbeF(kProbe, pm::ImageF{px.data(), w, h, long(w) * 16, pm::Layout::BGRA});
+    if (half)
+        for (auto& v : px) v = fromHalf(toHalf(v));
+    return px;
+}
+
+static LutKernelArgs probeArgs(LutKernelArgs a) {
+    a.probe = kProbe;
+    pm::probeGrid(kProbe, a.width, a.height, &a.probeCols, &a.probeRows);
+    return a;
+}
+
 static std::vector<uint8_t> pack(const std::vector<float>& px, bool half) {
     std::vector<uint8_t> out(px.size() * (half ? 2 : 4));
     for (size_t i = 0; i < px.size(); i++) {
@@ -168,6 +184,11 @@ static int runOpenCl(const pm::Lut3D& lut, const Frame& f, float amount) {
         cl.EnqueueReadBuffer(q, b, 1, 0, out.size(), out.data(), 0, nullptr, nullptr);
         report(half ? "opencl 16f src->dst" : "opencl 32f in-place", unpack(out, half),
                cpuRef(lut, f.bgra, f.width, f.height, amount, half), ms);
+        SetClArgs(cl, k, a, b, lutBuf, probeArgs(argsFor(lut, f.width, f.height, half, amount)));
+        cl.EnqueueNDRangeKernel(q, k, 2, nullptr, grid, block, 0, nullptr, nullptr);
+        cl.Finish(q);
+        cl.EnqueueReadBuffer(q, b, 1, 0, out.size(), out.data(), 0, nullptr, nullptr);
+        report(half ? "opencl 16f pattern" : "opencl 32f pattern", unpack(out, half), probeRef(f.width, f.height, half), 0);
         if (b != a) cl.ReleaseMemObject(b);
         cl.ReleaseMemObject(a);
     }
@@ -214,6 +235,10 @@ static int runCuda(const pm::Lut3D& lut, const Frame& f, float amount) {
         cu.MemcpyDtoH(out.data(), b, out.size());
         report(half ? "cuda 16f src->dst" : "cuda 32f in-place", unpack(out, half),
                cpuRef(lut, f.bgra, f.width, f.height, amount, half), ms);
+        LaunchCuda(cu, fn, nullptr, a, b, lutBuf, probeArgs(argsFor(lut, f.width, f.height, half, amount)));
+        cu.CtxSynchronize();
+        cu.MemcpyDtoH(out.data(), b, out.size());
+        report(half ? "cuda 16f pattern" : "cuda 32f pattern", unpack(out, half), probeRef(f.width, f.height, half), 0);
         if (b != a) cu.MemFree(b);
         cu.MemFree(a);
     }

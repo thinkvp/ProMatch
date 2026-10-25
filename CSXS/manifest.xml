@@ -4,6 +4,7 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <ExtensionList>
         <Extension Id="com.promatch.panel.main" Version="0.1.0" />
+        <Extension Id="com.promatch.panel.helper" Version="0.1.0" />
     </ExtensionList>
     <ExecutionEnvironment>
         <HostList>
@@ -44,6 +45,34 @@
                             <Height>480</Height>
                             <Width>360</Width>
                         </MinSize>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+        <!-- Invisible: opens the panel when the effect's Edit LUT asks (helper.html). -->
+        <Extension Id="com.promatch.panel.helper">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./helper.html</MainPath>
+                    <CEFCommandLine>
+                        <Parameter>--enable-nodejs</Parameter>
+                        <Parameter>--mixed-context</Parameter>
+                    </CEFCommandLine>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>false</AutoVisible>
+                    <StartOn>
+                        <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+                        <Event>applicationActivate</Event>
+                    </StartOn>
+                </Lifecycle>
+                <UI>
+                    <Type>Custom</Type>
+                    <Geometry>
+                        <Size>
+                            <Height>1</Height>
+                            <Width>1</Width>
+                        </Size>
                     </Geometry>
                 </UI>
             </DispatchInfo>

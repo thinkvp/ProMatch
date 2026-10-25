@@ -74,6 +74,32 @@ export function writeTextAtomic(p: string, text: string): void {
   need(fs).renameSync(tmp, p)
 }
 
+/** Folder entries (names), or [] if it doesn't exist. */
+export function listDir(dir: string): string[] {
+  try {
+    return need(fs).readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
+export function rename(from: string, to: string): void {
+  need(fs).renameSync(from, to)
+}
+
+/** Modification time in ms, or 0 if missing. */
+export function mtime(p: string): number {
+  try {
+    return need(fs).statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+export function isAbsolute(p: string): boolean {
+  return need(path).isAbsolute(p)
+}
+
 export function basename(p: string): string {
   return need(path).basename(p)
 }
@@ -139,15 +165,15 @@ export function safeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'ProMatch'
 }
 
-/** %APPDATA%\ProMatch\luts — what the native ProMatch effect reads, by match ID. */
-export function effectLutPath(id: number): string {
-  return join(ensureDir(join(dataDir(), 'luts')), `${id}.cube`)
+/** A fresh match ID (1…9,999,999); it travels in the effect's LUT text. */
+export function newMatchId(): number {
+  return 1 + Math.floor(Math.random() * 9999998)
 }
 
-/** A fresh match ID (1…9,999,999, exact in the effect's float slider) with no LUT file yet. */
-export function newMatchId(): number {
-  for (;;) {
-    const id = 1 + Math.floor(Math.random() * 9999998)
-    if (!hasNode || !exists(effectLutPath(id))) return id
+export function remove(p: string): void {
+  try {
+    need(fs).unlinkSync(p)
+  } catch {
+    // Already gone, or locked: a stray capture is harmless.
   }
 }

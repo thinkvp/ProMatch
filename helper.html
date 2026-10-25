@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>ProMatch helper</title>
+</head>
+<body>
+    <!--
+        Invisible, started with Premiere (CSXS/manifest.xml). The ProMatch
+        effect's Edit LUT button writes %APPDATA%\ProMatch\edit-request.json;
+        this opens the panel, which then loads the match (app.ts
+        watchEditRequests). An open panel closes itself and marks the request
+        "reopened"; this then opens it again, in front.
+    -->
+    <script src="vendor/CSInterface.js"></script>
+    <script>
+        (function () {
+            var fs = require('fs')
+            var path = require('path')
+            var file = path.join(process.env.APPDATA, 'ProMatch', 'edit-request.json')
+            var mtime = function () {
+                try {
+                    return fs.statSync(file).mtimeMs
+                } catch (e) {
+                    return 0
+                }
+            }
+            var seen = mtime()
+            // Heartbeat: the panel only closes itself for a reopen while this is fresh.
+            var alive = path.join(process.env.APPDATA, 'ProMatch', 'helper-alive')
+            var beat = function () {
+                try {
+                    fs.writeFileSync(alive, String(Date.now()))
+                } catch (e) {}
+            }
+            beat()
+            setInterval(beat, 2000)
+            setInterval(function () {
+                var m = mtime()
+                if (!m || m <= seen) return
+                seen = m
+                try {
+                    var r = JSON.parse(fs.readFileSync(file, 'utf8'))
+                    if (r.handled) return
+                    // A reopen: give the closing panel a moment to go first.
+                    setTimeout(function () {
+                        new CSInterface().requestOpenExtension('com.promatch.panel.main', '')
+                    }, r.reopened ? 400 : 0)
+                } catch (e) {
+                    // Half-written or unreadable: the next change is seen again.
+                }
+            }, 500)
+        })()
+    </script>
+</body>
+</html>

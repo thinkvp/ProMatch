@@ -7,6 +7,8 @@
  * message instead of hanging.
  */
 
+import type { ColourSetup } from '../core/calibrate.ts'
+
 interface CSInterfaceLike {
   evalScript(script: string, callback: (result: string) => void): void
   getSystemPath(type: string): string
@@ -20,7 +22,20 @@ export interface CaptureInfo {
   sequence: string
   width: number
   height: number
-  clip: { name: string; track: number; multicam: boolean } | null
+  clip: CaptureClip | null
+}
+
+/** The clip a capture shows, with what was on it then. */
+export interface CaptureClip {
+  name: string
+  track: number
+  multicam: boolean
+  /** Its effects in order (display names), without Opacity, Motion and ProMatch. */
+  effects?: string[]
+  /** Lumetri vignette amount when one is switched on, else null. */
+  vignette?: number | null
+  /** The media's colour space; scene-referred = log or raw. */
+  media?: { name: string; sceneReferred: boolean } | null
 }
 
 export interface SelectedClip {
@@ -111,10 +126,37 @@ export interface ApplyResult {
     embedded: boolean
     /** Why it was not embedded. */
     lutNote: string | null
-    lumetriBefore: boolean
+    /** The clip's effects listed before ProMatch (display names). Not the real order: see app.ts apply. */
+    before: string[]
+    /** All the clip's effects but ProMatch, Opacity and Motion. */
+    effects: string[]
   }>
   failed?: string[]
 }
 
-/** `lut`: the effect's embedded-LUT text (toEmbeddedText in core/lut.ts). */
+export interface SequenceColour extends ColourSetup {
+  sequence: string
+}
+
+export const sequenceColour = () => call<SequenceColour>('PM_sequenceColour')
+
+/** Reselect the selected clips so Effect Controls redraws (the effect's LUT name). */
+export const refreshEffectControls = () => call<number>('PM_refreshEffectControls')
+
+/** Open this panel, or bring it forward if it is open behind another. */
+export function bringToFront(): void {
+  try {
+    ;(cs as unknown as { requestOpenExtension(id: string, params: string): void } | null)?.requestOpenExtension('com.promatch.panel.main', '')
+  } catch {
+    // Not in CEP: nothing to bring forward.
+  }
+  window.focus()
+}
+
+/** Close this panel (the helper reopens it, see app.ts watchEditRequests). */
+export function closeSelf(): void {
+  ;(cs as unknown as { closeExtension(): void } | null)?.closeExtension()
+}
+
+/** `lut`: the effect's LUT text (toEmbeddedText in core/lut.ts, or the calibration pattern). */
 export const applyMatch = (id: number, lut: string) => call<ApplyResult>('PM_applyMatch', { id, lut })

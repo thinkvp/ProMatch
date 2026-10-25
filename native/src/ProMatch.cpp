@@ -3,8 +3,11 @@
 // Applies the colour match made in the ProMatch panel, blended by Amount.
 // The LUT lives in the effect itself, in the hidden "LUT" arbitrary-data
 // parameter, so it is saved with the project. The panel sets it as text
-// (PMLUT text, see lut_engine.h); any change re-renders. Without an
-// embedded LUT it falls back to %APPDATA%\ProMatch\luts\<Match ID>.cube.
+// (PMLUT text, see lut_engine.h), match ID included; any change re-renders.
+// "PMLUTP <n>" there draws the calibration pattern instead (lut_engine.h).
+// Two rows show the LUT's name with Change LUT (pick a .cube from the
+// project's ProMatch LUTs folder and store it in the effect), and Edit LUT
+// (ask the panel to reopen the match that made it).
 //
 // In Premiere it asks for BGRA 8u and BGRA 32f frames (the pixel format
 // suite); elsewhere (After Effects) it takes the standard 8-bit ARGB world.
@@ -14,16 +17,27 @@
 #include "SPBasic.h"
 #include "AE_Effect.h"
 #include "AE_EffectCB.h"
+#include "AE_EffectSuites.h"
 #include "AE_Macros.h"
 #include "Param_Utils.h"
 #include "PrSDKAESupport.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 
 #include "ProMatch.h"
@@ -31,18 +45,20 @@
 
 enum {
     PM_INPUT = 0,
-    PM_MATCH_ID = PM_PARAM_MATCH_ID,
     PM_AMOUNT = PM_PARAM_AMOUNT,
     PM_LUT = PM_PARAM_LUT,
+    PM_PICK = PM_PARAM_PICK,
+    PM_EDIT = PM_PARAM_EDIT,
     PM_NUM_PARAMS
 };
 
 // Disk IDs: stable across versions so saved projects keep their values.
-// 3 was the Revision slider of build 1; not reused.
+// 1 was Match ID (to build 6) and 3 the Revision slider of build 1; not reused.
 enum {
-    DISK_MATCH_ID = 1,
     DISK_AMOUNT = 2,
     DISK_LUT = 4,
+    DISK_PICK = 5,
+    DISK_EDIT = 7,  // 6 and 8 were build 9's group; not reused
 };
 
 static const A_long kPremiere = 'PrMr';
@@ -243,9 +259,6 @@ static PF_Err ParamsSetup(PF_InData* in_data, PF_OutData* out_data) {
     PF_ParamDef def;
 
     AEFX_CLR_STRUCT(def);
-    PF_ADD_FLOAT_SLIDERX("Match ID", 0, 9999999, 0, 9999999, 0, PF_Precision_INTEGER, 0, 0, DISK_MATCH_ID);
-
-    AEFX_CLR_STRUCT(def);
     PF_ADD_FLOAT_SLIDERX("Amount", 0, 100, 0, 100, 100, PF_Precision_TENTHS, PF_ValueDisplayFlag_PERCENT, 0, DISK_AMOUNT);
 
     // The LUT itself; set by the panel, no UI.
@@ -253,7 +266,202 @@ static PF_Err ParamsSetup(PF_InData* in_data, PF_OutData* out_data) {
     PF_ADD_ARBITRARY2("LUT", 1, 1, PF_ParamFlag_CANNOT_TIME_VARY, PF_PUI_NO_ECW_UI, NewEmptyArb(in_data), DISK_LUT,
                       &kArbRefcon);
 
+    // The button shows the LUT's file name (ShowLutName) and picks another.
+    // "LUT " with a space: apart from "LUT" (the data), which host.jsx finds by name.
+    PF_ADD_BUTTON("LUT ", "Change LUT", 0, PF_ParamFlag_SUPERVISE | PF_ParamFlag_CANNOT_TIME_VARY, DISK_PICK);
+    PF_ADD_BUTTON("Match", "Edit LUT", 0, PF_ParamFlag_SUPERVISE | PF_ParamFlag_CANNOT_TIME_VARY, DISK_EDIT);
+
     out_data->num_params = PM_NUM_PARAMS;
+    return PF_Err_NONE;
+}
+
+// ------------------------------------------------------ the LUT button
+
+// The effect's LUT (cached by content), or nullptr.
+static std::shared_ptr<const pm::Lut3D> CurrentLut(PF_InData* in_data, PF_ParamDef* params[]) {
+    PF_Handle arb = params[PM_LUT]->u.arb_d.value;
+    if (!arb) return nullptr;
+    const size_t len = size_t(PF_GET_HANDLE_SIZE(arb));
+    const void* p = PF_LOCK_HANDLE(arb);
+    std::shared_ptr<const pm::Lut3D> lut = pm::embeddedLut(p, len);
+    PF_UNLOCK_HANDLE(arb);
+    return lut;
+}
+
+// The button's text: the LUT's file name, whole (a button's text isn't held
+// to a parameter name's 31 characters).
+static std::string LutLabel(PF_InData* in_data, PF_ParamDef* params[]) {
+    std::shared_ptr<const pm::Lut3D> lut = CurrentLut(in_data, params);
+    if (!lut) return "Choose a LUT";
+    if (lut->probe) return "Calibrating";
+    if (lut->name.empty()) return "From ProMatch (Apply again to name it)";
+    return lut->name + ".cube";
+}
+
+// Show the LUT's file name on the button. The SDK documents renaming a
+// parameter from USER_CHANGED_PARAM and UPDATE_PARAMS_UI, not changing a
+// button's text; build 8 suggested Premiere redraws the text too, and build
+// 11 relies on it (spike P11). The text must outlive the call: kept for good.
+static void ShowLutName(PF_InData* in_data, PF_ParamDef* params[], const char* why) {
+    static std::mutex textMu;
+    static std::set<std::string> texts;
+    const char* text;
+    const std::string label = LutLabel(in_data, params);
+    {
+        std::lock_guard<std::mutex> lock(textMu);
+        text = texts.insert(label).first->c_str();
+    }
+    const void* suite = nullptr;
+    if (!in_data->pica_basicP ||
+        in_data->pica_basicP->AcquireSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3, &suite) != kSPNoError || !suite) {
+        pm::logLine("LUT button: no param utils suite (%s)", why);
+        return;
+    }
+    PF_ParamDef def = *params[PM_PICK];
+    std::snprintf(def.PF_DEF_NAME, sizeof(def.PF_DEF_NAME), "%s", "LUT ");  // the space: see ParamsSetup
+    def.u.button_d.u.namesptr = text;
+    const PF_Err err = ((PF_ParamUtilsSuite3*)suite)->PF_UpdateParamUI(in_data->effect_ref, PM_PICK, &def);
+    in_data->pica_basicP->ReleaseSuite(kPFParamUtilsSuite, kPFParamUtilsSuiteVersion3);
+    static std::mutex mu;
+    static std::string last;
+    std::lock_guard<std::mutex> lock(mu);
+    const std::string key = std::string(why) + "|" + label + "|" + std::to_string(err);
+    if (key != last) {
+        last = key;
+        pm::logLine("LUT button: label \"%s\" (%s) -> err %d", label.c_str(), why, (int)err);
+    }
+}
+
+#ifdef _WIN32
+static std::string Utf8(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string s(size_t(n), ' ');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+// Ask for a .cube in the project's ProMatch LUTs folder. Empty if cancelled.
+static std::wstring PickCube(PF_InData* in_data) {
+    HWND owner = nullptr;
+    if (in_data->utils && in_data->utils->get_platform_data && PF_GET_PLATFORM_DATA(PF_PlatData_MAIN_WND, &owner) != PF_Err_NONE)
+        owner = nullptr;
+    if (!owner) owner = GetForegroundWindow();
+    const std::wstring folder = pm::lutFolder();
+    wchar_t file[MAX_PATH * 4] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = L"Cube LUTs (*.cube)\0*.cube\0All files\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = sizeof(file) / sizeof(file[0]);
+    ofn.lpstrInitialDir = folder.empty() ? nullptr : folder.c_str();
+    ofn.lpstrTitle = L"ProMatch: choose a LUT";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    pm::logLine("LUT button: dialog in \"%s\" (owner %p)", Utf8(folder).c_str(), (void*)owner);
+    if (!GetOpenFileNameW(&ofn)) return std::wstring();
+    return file;
+}
+#endif
+
+#ifdef _WIN32
+// Edit LUT: ask the panel to reopen the match that made this LUT. The panel
+// (or, when it is closed, its helper, which opens it) watches this file.
+static void RequestEdit(PF_InData* in_data, PF_ParamDef* params[]) {
+    std::shared_ptr<const pm::Lut3D> lut = CurrentLut(in_data, params);
+    if (!lut || lut->id <= 0) {
+        pm::logLine("Edit LUT: no match ID");
+        MessageBoxW(GetForegroundWindow(),
+                    L"This LUT wasn't made in the ProMatch panel (or was made before ProMatch kept its matches), so there "
+                    L"is no match to open. Make one in the panel and press Apply.",
+                    L"ProMatch", MB_ICONINFORMATION);
+        return;
+    }
+    std::string name;
+    for (char c : lut->name) {
+        if (c == '"' || c == '\\') name.push_back('\\');
+        name.push_back(c);
+    }
+    char json[600];
+    std::snprintf(json, sizeof(json), "{\"id\":%ld,\"name\":\"%s\",\"at\":%lld}\n", lut->id, name.c_str(),
+                  (long long)GetTickCount64());
+    FILE* f = _wfopen(pm::dataPath(L"edit-request.json").c_str(), L"wb");
+    if (f) {
+        std::fputs(json, f);
+        std::fclose(f);
+    }
+    pm::logLine("Edit LUT: requested match %ld (%s)", lut->id, lut->name.c_str());
+}
+#endif
+
+// Change LUT: load the chosen .cube into the LUT parameter. Edit LUT: ask the
+// panel for the match.
+static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[],
+                               const PF_UserChangedParamExtra* extra) {
+    pm::logLine("USER_CHANGED_PARAM index %d", extra ? (int)extra->param_index : -1);
+#ifdef _WIN32
+    if (extra && extra->param_index == PM_EDIT) {
+        RequestEdit(in_data, params);
+        return PF_Err_NONE;
+    }
+#endif
+    if (!extra || extra->param_index != PM_PICK) return PF_Err_NONE;
+#ifdef _WIN32
+    const std::wstring path = PickCube(in_data);
+    if (path.empty()) {
+        pm::logLine("LUT button: cancelled");
+        return PF_Err_NONE;
+    }
+    std::string text, error;
+    {
+        FILE* f = _wfopen(path.c_str(), L"rb");
+        if (f) {
+            char buf[1 << 16];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+            std::fclose(f);
+        }
+    }
+    pm::Lut3D cube;
+    if (text.empty() || !pm::parseCube(text, cube, &error)) {
+        pm::logLine("LUT button: could not read %s: %s", Utf8(path).c_str(), error.c_str());
+        MessageBoxW(GetForegroundWindow(), (L"ProMatch could not read this LUT:\n" + path).c_str(), L"ProMatch", MB_ICONWARNING);
+        return PF_Err_NONE;
+    }
+    for (int c = 0; c < 3; c++) {
+        if (cube.domainMin[c] != 0.f || cube.domainMax[c] != 1.f) {
+            pm::logLine("LUT button: %s has a domain other than 0..1", Utf8(path).c_str());
+            MessageBoxW(GetForegroundWindow(), L"ProMatch only takes LUTs with a 0..1 domain.", L"ProMatch", MB_ICONWARNING);
+            return PF_Err_NONE;
+        }
+    }
+    std::wstring stem = path.substr(path.find_last_of(L"\\/") + 1);
+    const size_t dot = stem.find_last_of(L'.');
+    if (dot != std::wstring::npos) stem.resize(dot);
+    // A .cube the panel saved names its match ("# ProMatch match <id>"), so
+    // Edit LUT still finds it; any other LUT is on its own (ID 0).
+    long id = 0;
+    const size_t tag = text.find("# ProMatch match ");
+    if (tag != std::string::npos) id = std::atol(text.c_str() + tag + 17);
+    const std::vector<uint8_t> bytes = pm::toUtf16(pm::toEmbeddedText(cube, id, Utf8(stem)));
+
+    // Write the new text into the parameter's handle and say it changed.
+    PF_Handle h = params[PM_LUT]->u.arb_d.value;
+    if (h) {
+        if (PF_RESIZE_HANDLE(A_u_long(bytes.size()), &h) != PF_Err_NONE) return PF_Err_OUT_OF_MEMORY;
+    } else {
+        h = PF_NEW_HANDLE(bytes.size());
+        if (!h) return PF_Err_OUT_OF_MEMORY;
+    }
+    void* p = PF_LOCK_HANDLE(h);
+    if (p) std::memcpy(p, bytes.data(), bytes.size());
+    PF_UNLOCK_HANDLE(h);
+    params[PM_LUT]->u.arb_d.value = h;
+    params[PM_LUT]->uu.change_flags = PF_ChangeFlag_CHANGED_VALUE;
+    out_data->out_flags |= PF_OutFlag_FORCE_RERENDER | PF_OutFlag_REFRESH_UI;
+    pm::logLine("LUT button: loaded %s (%d^3, %zu bytes)", Utf8(path).c_str(), cube.size, bytes.size());
+    ShowLutName(in_data, params, "picked");
+#endif
     return PF_Err_NONE;
 }
 
@@ -270,7 +478,6 @@ static void CopyRows(const PF_EffectWorld* src, PF_EffectWorld* dst, int bytesPe
 
 static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[], PF_LayerDef* output) {
     PF_EffectWorld* input = &params[PM_INPUT]->u.ld;
-    const long id = std::lround(params[PM_MATCH_ID]->u.fs_d.value);
     const float amount = float(params[PM_AMOUNT]->u.fs_d.value / 100.0);
 
     // Pixel layout of this render.
@@ -292,26 +499,19 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
         }
     }
 
-    // The embedded LUT, else the file for Match ID.
+    // The embedded LUT (or the calibration pattern, whatever Amount says).
     std::shared_ptr<const pm::Lut3D> lut;
-    const char* source = "none";
-    if (amount > 0.f) {
-        PF_Handle arb = params[PM_LUT]->u.arb_d.value;
-        if (arb) {
-            const size_t len = size_t(PF_GET_HANDLE_SIZE(arb));
-            const void* p = PF_LOCK_HANDLE(arb);
-            std::string err;
-            lut = pm::embeddedLut(p, len, &err);
-            if (!lut && !err.empty()) pm::logLine("Embedded LUT: %s", err.c_str());
-            PF_UNLOCK_HANDLE(arb);
-            if (lut) source = "embedded";
-        }
-        if (!lut && id > 0) {
-            std::string lutError;
-            lut = pm::cachedLut(id, 0, &lutError);
-            source = lut ? "file" : "missing";
-        }
+    PF_Handle arb = params[PM_LUT]->u.arb_d.value;
+    if (arb) {
+        const size_t len = size_t(PF_GET_HANDLE_SIZE(arb));
+        const void* p = PF_LOCK_HANDLE(arb);
+        std::string err;
+        lut = pm::embeddedLut(p, len, &err);
+        if (!lut && !err.empty()) pm::logLine("Embedded LUT: %s", err.c_str());
+        PF_UNLOCK_HANDLE(arb);
     }
+    const long id = lut ? lut->id : 0;
+    const char* source = !lut ? "none" : (lut->probe ? "pattern" : "embedded");
 
     // Log each new render setup once, not every frame.
     {
@@ -320,7 +520,8 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
         char key[200];
         std::snprintf(key, sizeof(key), "Render fmt=%s %dx%d rowbytes=%ld id=%ld amount=%.3f lut=%s %d",
                       isFloat ? "BGRA32f" : (layout == pm::Layout::BGRA ? "BGRA8u" : "ARGB8"), (int)output->width,
-                      (int)output->height, (long)output->rowbytes, id, amount, source, lut ? lut->size : 0);
+                      (int)output->height, (long)output->rowbytes, id, amount, source,
+                      lut ? (lut->probe ? lut->probe : lut->size) : 0);
         std::lock_guard<std::mutex> lock(mu);
         if (last != key) {
             last = key;
@@ -328,7 +529,14 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
         }
     }
 
-    if (!lut) {
+    if (lut && lut->probe) {
+        if (isFloat)
+            pm::fillProbeF(lut->probe, pm::ImageF{(float*)output->data, output->width, output->height, (long)output->rowbytes, layout});
+        else
+            pm::fillProbe8(lut->probe, pm::Image8{(uint8_t*)output->data, output->width, output->height, (long)output->rowbytes, layout});
+        return PF_Err_NONE;
+    }
+    if (!lut || amount <= 0.f) {
         CopyRows(input, output, isFloat ? 16 : 4);
         return PF_Err_NONE;
     }
@@ -362,6 +570,11 @@ extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd, PF_InData* in_data, PF_OutDat
             case PF_Cmd_PARAMS_SETUP:       return ParamsSetup(in_data, out_data);
             case PF_Cmd_RENDER:             return Render(in_data, out_data, params, output);
             case PF_Cmd_ARBITRARY_CALLBACK: return Arbitrary(in_data, reinterpret_cast<PF_ArbParamsExtra*>(extra));
+            case PF_Cmd_USER_CHANGED_PARAM:
+                return UserChangedParam(in_data, out_data, params, reinterpret_cast<const PF_UserChangedParamExtra*>(extra));
+            case PF_Cmd_UPDATE_PARAMS_UI:
+                ShowLutName(in_data, params, "update");
+                return PF_Err_NONE;
             default:                        return PF_Err_NONE;
         }
     } catch (...) {

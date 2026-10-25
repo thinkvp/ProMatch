@@ -31,8 +31,9 @@ then **Window ▸ Extensions ▸ ProMatch**. DevTools: <http://localhost:8094> w
 2. **Target.** Switch to the camera you want to fix (same moment if possible) and press
    **Capture**. Capture it *before* putting a ProMatch LUT on it, or you will be matching
    on top of an old match.
-3. **Points.** Press **Auto** for a starting set of pairs (dashed, marked *A*). Check them and
-   delete any that look wrong, then add two or three of your own on skin: click something on
+3. **Points.** Press **Auto** for a starting set of pairs (dashed, marked *A*), including a few
+   on each face. Check them and delete any that look wrong, then add a few of your own,
+   especially on plain areas Auto can't reach: click something on
    the source, then the same thing on the target. Each row shows source, target and matched
    swatches, plus the error before and *tested*.
 
@@ -66,6 +67,9 @@ while keeping their relative sizes.
 **Switching points off:** click a point's number in the list to switch it off (hollow number,
 faded markers). It is left out of the match but still measured against it, so its row shows
 how close the match gets at that spot *without* it. Click again to switch it back on.
+
+**New frames:** capturing (or opening) a new source or target clears the points, since they
+belonged to the old frame. **Ctrl+Z** brings them back.
 
 **Undo:** every point change (place, draw, move, resize, delete, switch off, Auto, Clear all)
 can be undone with **Ctrl+Z** or the ↶ button in the toolbar. **Ctrl+Shift+Z**, **Ctrl+Y** or
@@ -150,24 +154,42 @@ All of it is in `src/core/`, with no dependency on Premiere or the DOM.
   - OpenCV's AKAZE matches keypoints on contrast-equalised greyscale.
   - RANSAC splits the matches into planes (face, picture, shirt...).
   - Each plane is searched for flat, unclipped spots near its own matches. Each spot is mapped
-    through the plane and must be flat in the other frame too.
+    through the plane and must be flat in the other frame too. Up to 16 pairs, picked for
+    colour variety.
+  - **Faces** (`faces.ts`) get up to 6 skin pairs each from a face mesh: OpenCV's YuNet finds
+    each face, and MediaPipe's face mesh puts 468 landmarks on it. Landmark *n* is the same spot
+    on the face in both frames (middle of the forehead, the cheekbone), whatever the angle.
+    Pairs come from open skin only (forehead, cheeks, nose bridge, chin), and only where the
+    face points towards both cameras: the far cheek of a turned head is skipped. Each disc is
+    sized to the face. With one face in each frame they're paired directly; with several, the
+    planes decide which face is which.
   - Pairs whose colours disagree with the consensus are dropped.
 
   It needs some texture: bare walls and plain sofas give it nothing to match, so pick those by
-  hand. OpenCV.js (11 MB, `vendor/opencv.js`, copied by `npm run build`) loads only the first
-  time you press Auto.
+  hand. OpenCV.js (11 MB, `vendor/opencv.js`, copied by `npm run build`) and the face models
+  (`vendor/face_detection_yunet_2023mar.onnx`, 230 KB, from the
+  [OpenCV model zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), MIT;
+  `vendor/face_landmark.tflite`, 1.2 MB, from [MediaPipe](https://github.com/google-ai-edge/mediapipe),
+  Apache 2.0) load only the first time you press Auto. If the face models fail to load, Auto
+  carries on without skin pairs.
 - **Auto, colour** (`auto.ts`). The fallback when too few features match. It clusters the
   source frame's colours and iteratively aligns the target's colours to them. It improves the
   fit, but its pairs can land on different objects that share a colour.
 
-Scores on real footage (on points each method never saw; lower is better):
+Scores on the two saved test cases (on hand-placed points each method never saw; lower is
+better):
 
-| | ΔE |
-| --- | --- |
-| No correction | 9.95 |
-| Colour Auto | 4.35 |
-| Geometric Auto | 2.85 |
-| Geometric Auto + 3 manual points | 2.81 |
+| | 7 points | 11 points |
+| --- | --- | --- |
+| No correction | 9.95 | 9.35 |
+| Colour Auto | 4.31 | 4.68 |
+| Geometric Auto, 10 pairs, no faces (before 2026-10-25) | 3.12 | 4.28 |
+| Geometric Auto, 16 pairs + 6 on the face | 3.22 | **3.12** |
+| ... + 3 manual points | 3.23 | 3.18 |
+
+On the 11-point frame Auto alone now beats 10 hand-placed points alone (3.78). On the 7-point
+frame skin was already well covered; its worst points are the sofa and the picture mat, which
+feature matching can't reach (the sofa is out of focus in the close-up).
 
 `npx tsx scripts/eval-real.ts` reruns the comparison on the current session's hand-placed
 points; set `EVAL_SESSION` to score a saved point set instead.
@@ -178,7 +200,7 @@ points; set `EVAL_SESSION` to score a saved point set instead.
 
 ### Checking the defaults
 
-**Save as test case** (Points tab, in Premiere) copies both frames and your own points into
+**Save as test case** (Points tab, in Premiere; shown in Developer mode, **Ctrl+Shift+D**) copies both frames and your own points into
 `%APPDATA%\ProMatch\eval\`. Two scripts score settings on every saved case, always on points
 the fit never saw. They use two kinds of point: your own, each left out in turn, and a few
 hundred same-spot pairs that feature matching finds away from them.
@@ -217,6 +239,15 @@ re-renders. It renders on the GPU (CUDA; OpenCL too) when Premiere's renderer is
 and on the CPU otherwise. On the test interview, the GPU render matches the panel's After view to
 0.25/255 (the CPU render to 0.44/255), and Media Encoder exports are pixel-identical to the Program
 Monitor (spikes P7–P10). Build and install: `native/PLAN.md`.
+
+In Effect Controls it shows **Amount** and two rows:
+- **LUT**, on a button showing the LUT's file name: click it to pick another `.cube` from the project's `ProMatch LUTs`
+  folder; it is stored in the effect. A LUT saved by ProMatch still knows its match; any other
+  LUT is on its own (and isn't calibrated for a scene-referred sequence).
+- **Edit LUT** opens the ProMatch panel on the match that made the LUT: both frames, the points
+  and the settings. Every Apply keeps them in `ProMatch LUTs\Matches\<name> [<id>]\`. Press
+  **Apply** after changing it and every clip using the match updates. A small invisible helper
+  (`helper.html`) opens the panel when it is closed.
 
 ## Not verified yet
 

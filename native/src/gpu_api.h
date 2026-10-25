@@ -144,6 +144,8 @@ inline const OpenClApi& OpenCl() {
 struct LutKernelArgs {
     int srcPitch, dstPitch, is16f, width, height, size;
     float dmin[3], dmax[3], amount;
+    // Calibration pattern: grid size n (0 = apply the LUT) and its layout.
+    int probe = 0, probeCols = 1, probeRows = 1;
 };
 
 // Set the OpenCL kernel's arguments.
@@ -161,13 +163,17 @@ inline void SetClArgs(const OpenClApi& cl, cl_kernel k, cl_mem src, cl_mem dst, 
     for (int c = 0; c < 3; c++) cl.SetKernelArg(k, i++, sizeof(float), &a.dmin[c]);
     for (int c = 0; c < 3; c++) cl.SetKernelArg(k, i++, sizeof(float), &a.dmax[c]);
     cl.SetKernelArg(k, i++, sizeof(float), &a.amount);
+    cl.SetKernelArg(k, i++, sizeof(int), &a.probe);
+    cl.SetKernelArg(k, i++, sizeof(int), &a.probeCols);
+    cl.SetKernelArg(k, i++, sizeof(int), &a.probeRows);
 }
 
 // Launch the CUDA kernel (caller has the context current).
 inline CUresult LaunchCuda(const CudaApi& cu, CUfunction f, CUstream stream, CUdeviceptr src, CUdeviceptr dst,
                            CUdeviceptr lut, LutKernelArgs a) {
     void* args[] = {&src, &a.srcPitch, &dst, &a.dstPitch, &a.is16f, &a.width, &a.height, &lut, &a.size,
-                    &a.dmin[0], &a.dmin[1], &a.dmin[2], &a.dmax[0], &a.dmax[1], &a.dmax[2], &a.amount};
+                    &a.dmin[0], &a.dmin[1], &a.dmin[2], &a.dmax[0], &a.dmax[1], &a.dmax[2], &a.amount,
+                    &a.probe,   &a.probeCols, &a.probeRows};
     return cu.LaunchKernel(f, (a.width + 15) / 16, (a.height + 15) / 16, 1, 16, 16, 1, 0, stream, args, nullptr);
 }
 

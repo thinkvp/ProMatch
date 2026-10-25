@@ -297,6 +297,7 @@ input.switch:checked::after { transform: translateX(12px); background: #fff; }
     color: var(--text);
     min-height: 2.9em;
 }
+.hint.warn { background: rgba(236, 91, 98, 0.1); border-left-color: var(--bad); }
 .hint kbd { font: 10px var(--mono); padding: 0 4px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 3px; background: var(--surface-2); color: var(--text-2); }
 
 /* ------------------------------------------------------------ cards */
@@ -411,6 +412,9 @@ input.switch:checked::after { transform: translateX(12px); background: #fff; }
 
 .dev { display: none; }
 body.dev-mode .dev { display: block; }
+/* Developer-only controls inside ordinary rows (Save as test case). */
+.dev-inline { display: none; }
+body.dev-mode .dev-inline { display: inline-block; }
 .dev p { margin: 6px 0; }
 
 .log-drawer { margin-top: 10px; }

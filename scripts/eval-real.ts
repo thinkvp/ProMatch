@@ -5,7 +5,8 @@
  *   - auto: fitted on its own suggestions, scored on every session pair
  *   - auto + a few manual: leave-one-out, auto pairs always in the fit
  * "colour" is Auto v1 (pairs by colour, auto.ts); "geometric" is Auto v2
- * (pairs at the same physical spot, geo-auto.ts, needs OpenCV).
+ * (pairs at the same physical spot, geo-auto.ts, needs OpenCV), with skin
+ * pairs from the face models in vendor/ (faces.ts), as the panel runs it.
  * The score is the ΔE between matched target and source at the session's
  * points, measured with the session's disc samples.
  * Run: npx tsx scripts/eval-real.ts   (writes captures/compare-auto.png)
@@ -16,6 +17,7 @@ import { join } from 'node:path'
 import { analyse } from '../src/core/analysis.ts'
 import { suggestPairs } from '../src/core/auto.ts'
 import { deltaE, encodedToOklab } from '../src/core/color.ts'
+import { detectFaces, faceMesh, loadFaceModels } from '../src/core/faces.ts'
 import { matchFeatures, readyCv } from '../src/core/features.ts'
 import { suggestFromMatches } from '../src/core/geo-auto.ts'
 import { applyLutToPixels, bakeLut } from '../src/core/lut.ts'
@@ -49,14 +51,16 @@ const v1 = suggestPairs(analyse(src), analyse(tgt))
 const v1ms = Date.now() - t0
 t0 = Date.now()
 const matches = matchFeatures(cv, src, tgt)
-const geo = suggestFromMatches(matches, src, tgt)
+const models = loadFaceModels(cv, readFileSync('vendor/face_detection_yunet_2023mar.onnx'), readFileSync('vendor/face_landmark.tflite'))
+const meshes = (img: typeof src) => detectFaces(cv, models, img).slice(0, 4).map((f) => faceMesh(cv, models, img, f))
+const geo = suggestFromMatches(matches, src, tgt, undefined, { source: meshes(src), target: meshes(tgt) })
 const v2ms = Date.now() - t0
 const v1Pairs = toPairs(v1)
 const v2Pairs = toPairs(geo.suggestions)
 
 console.log(`${pts.length} manual points · source ${s.frames.source.label} · target ${s.frames.target.label}`)
 console.log(
-  `geometric: ${matches.length} matches, planes ${geo.planes.map((p) => p.matches).join('/')}, ${geo.candidates} flat candidates, ${geo.rejected} rejected by consensus, ${v2ms} ms`,
+  `geometric: ${matches.length} matches, planes ${geo.planes.map((p) => p.matches).join('/')}, ${geo.faces} face(s) paired, ${geo.candidates} flat candidates, ${geo.rejected} rejected by consensus, ${v2ms} ms`,
 )
 console.log(`                               colour Auto   geometric Auto`)
 console.log(`  no correction                ΔE ${mean((i) => err(null, i)).toFixed(2)}`)

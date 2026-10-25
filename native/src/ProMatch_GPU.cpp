@@ -224,10 +224,12 @@ public:
         const int bpp = GetGPUBytesPerPixel(format);
 
         LogSetup(format, width, height, srcData == dstData, amount);
-        // Nothing to do in place; for separate frames, an identity LUT at
-        // Amount 0 copies exactly.
-        const bool active = mLut && amount > 0.f;
-        if (!active && srcData == dstData) return suiteError_NoError;
+        // The calibration pattern replaces the frame whatever Amount says.
+        // Otherwise nothing to do in place; for separate frames, an identity
+        // LUT at Amount 0 copies exactly.
+        const int probe = mLut ? mLut->probe : 0;
+        const bool active = mLut && !probe && amount > 0.f;
+        if (!active && !probe && srcData == dstData) return suiteError_NoError;
         const std::shared_ptr<const pm::Lut3D> use = active ? mLut : Identity();
 
         Device& d = DeviceFor(mDeviceIndex);
@@ -246,6 +248,8 @@ public:
             args.dmax[c] = lut.domainMax[c];
         }
         args.amount = active ? amount : 0.f;
+        args.probe = probe;
+        if (probe) pm::probeGrid(probe, width, height, &args.probeCols, &args.probeRows);
 
         if (d.framework == PrGPUDeviceFramework_CUDA) {
             const CudaApi& cu = Cuda();
@@ -289,8 +293,7 @@ private:
     }
 
     // The LUT, once per instance (Premiere makes a new instance when a
-    // parameter changes, and the LUT can't vary over time): the embedded
-    // one, else the file for Match ID.
+    // parameter changes, and the LUT can't vary over time).
     void ReadLut(PrTime t) {
         mLutRead = true;
         // An arbitrary-data param arrives as a memory block (the UTF-16 PMLUT
@@ -306,20 +309,17 @@ private:
             static int logged = 0;
             if (logged++ < 3) pm::logLine("GPU: LUT param type %d (expected a memory block)", (int)p.mType);
         }
-        if (!mLut) {
-            const long id = std::lround(Float(GetParam(PM_PARAM_MATCH_ID, t)));
-            if (id > 0) mLut = pm::cachedLut(id, 0);
-        }
     }
 
     void LogSetup(PrPixelFormat format, int width, int height, bool inPlace, float amount) {
         static std::mutex mu;
         static std::string last;
         char key[200];
-        std::snprintf(key, sizeof(key), "GPU Render %s fmt=%s %dx%d %s amount=%.3f lut=%d",
+        std::snprintf(key, sizeof(key), "GPU Render %s fmt=%s %dx%d %s amount=%.3f lut=%d%s",
                       FrameworkName(mDeviceInfo.outDeviceFramework),
                       format == PrPixelFormat_GPU_BGRA_4444_32f ? "32f" : "16f", width, height,
-                      inPlace ? "in-place" : "src->dst", amount, mLut ? mLut->size : 0);
+                      inPlace ? "in-place" : "src->dst", amount, mLut ? (mLut->probe ? mLut->probe : mLut->size) : 0,
+                      mLut && mLut->probe ? " pattern" : "");
         std::lock_guard<std::mutex> lock(mu);
         if (last != key) {
             last = key;

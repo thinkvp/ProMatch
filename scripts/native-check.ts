@@ -109,5 +109,5 @@ for (const f32 of [false, true]) {
 
 // The effect's embedded-LUT parameter: decode the panel's text in C++.
 const embeddedPath = join(dir, 'embedded.txt')
-writeFileSync(embeddedPath, toEmbeddedText(lut))
+writeFileSync(embeddedPath, toEmbeddedText(lut, 4242, 'ProMatch – C0779 (A)'))
 console.log('embedded text, decoded by the effect:', execFileSync(tool, ['--embedded', cubePath, embeddedPath], { encoding: 'utf8' }).trim())

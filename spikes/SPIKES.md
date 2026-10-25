@@ -18,6 +18,7 @@ observed by just using the panel.
 | P8 | Does **Apply** after more tuning update the picture (Revision bump), in the Program Monitor and in exports? | Risk 3: Premiere caches rendered frames by parameter values, not by the LUT file | A visible parameter the user nudges |
 | P10 | Can the effect render on the GPU (Premiere's GPU filter API), reading the embedded LUT? | Playback without GPU→CPU→GPU copies; the CPU path also shifts the input by 0.4/255 (P7) | CPU path only |
 | P9 | Can the effect carry the LUT itself (an arbitrary-data parameter set from script), so a project opens matched on another machine? | Phase 2 of `native/PLAN.md`: portability, and no Revision slider | Keep reading `%APPDATA%\ProMatch\luts` and copy the LUTs by hand |
+| P11 | Effect build 8: does Premiere show a button parameter (`PF_Param_BUTTON`) in Effect Controls, send `PF_Cmd_USER_CHANGED_PARAM` when it is clicked (the effect opens a file dialog and stores the chosen `.cube`), and show the parameter's new name from `PF_UpdateParamUI` (the LUT's name)? | Pick a different LUT from Effect Controls, and see which LUT a clip uses | Show and change the LUT from the panel instead |
 | P6 | Lumetri reads our `.cube` (TITLE, DOMAIN_MIN/MAX, sizes 17/33/65) and the result in the Program Monitor matches the panel's **After** view | Confirms the LUT is applied in the encoding the engine assumes (display-referred Rec.709) | If it differs, the sequence's colour management is converting first — note the settings here |
 
 ## Results
@@ -257,6 +258,15 @@ an arbitrary-data parameter "LUT" (no UI, can't be keyframed), and Revision was 
 - **Not checked:** the OpenCL path inside Premiere (needs the project renderer switched), 16f frames inside
   Premiere (it only handed this effect 32f), and playback dropped frames, GPU vs CPU path.
 
+**P11, effect build 8 (2026-10-25, LUT button).** Premiere shows the `PF_Param_BUTTON`; a click
+sends `PF_Cmd_USER_CHANGED_PARAM` (index 3) and the effect's Windows file dialog opens over Premiere.
+Premiere sends `PF_Cmd_UPDATE_PARAMS_UI` when Effect Controls shows the effect, and
+`PF_UpdateParamUI` renaming the button returned no error: the button read "ProMatch match" (the
+label for a build-7 LUT with no name). Not yet known: loading a picked `.cube` (the dialog was
+cancelled), and whether the renamed *name* or the button *text* is what Premiere draws; build 9 sets
+them apart (name = the LUT's name, text = "Change LUT") inside a "ProMatch LUT" group, with an
+Edit LUT button beside it.
+
 ### Premiere Pro 25.x (2025)
 
 _Not yet run._
@@ -362,3 +372,33 @@ Options for Apply under UXP:
 **Recommendation:** stay on CEP for now, since it works and is supported until 2028–29. Keep the
 port plan as "WebView UI + UXP host + Apply by option 1 or 2". Re-run U4 on each new Premiere
 release.
+
+## Auto v3: more pairs and face landmarks (2026-10-25)
+
+Scored with `scripts/eval-real.ts` on the two saved test cases (7 and 11 hand-placed points, same
+camera pair), fitted on Auto's pairs alone and scored on the hand points. Before: 3.12 / 4.28 ΔE.
+
+- **More pairs.** 10 → 16 plane pairs, and planes from 12 matches instead of 20 (up to 6 planes:
+  this adds a fourth area of 13–17 matches on these frames). Combined mean over the 18 points
+  3.80 → 3.43. Past ~20 the score stops improving and moves ±0.3 from one setting to the next,
+  which is the noise floor of 18 points.
+- **The face models run inside OpenCV.js 4.12** (`@techstark/opencv-js`), under Node and in the
+  panel: `cv.FaceDetectorYN` with YuNet (2023mar ONNX) and `cv.readNetFromTFLite` with MediaPipe's
+  `face_landmark.tflite`. The mesh's output comes back as `[1, 1404, 1, 1]` (468 × xyz); input is
+  an NCHW blob, RGB 0..1, 192×192. Detection 0.25 s at 960 px wide (0.9 s at 1080p), mesh 0.04 s.
+  On both frames the mesh puts the eyes, mouth, forehead, cheeks and chin on the same spots
+  across the 3/4 close-up and the frontal wide (checked by eye on crops).
+- **Skin pairs.** Combined mean with 2 / 4 / 6 skin pairs per face: 3.39 / 3.15 / 3.04. The
+  11-point case gains most (3.66 → 2.97). The 7-point case doesn't move: its skin was already
+  matched, and its worst points are the sofa (soft focus in the close-up, so no matches) and the
+  picture mat.
+- **Discs sized to the object in each frame** (smaller on the wide shot, sized to the face for
+  skin): 3.08 vs 3.04, no measurable gain. Kept so each pair is sampled with the disc it was
+  checked flat with.
+- **Plane spots on a face with a mesh dropped**: 3.16 vs 3.08, within noise. Kept: the face had
+  10 overlapping labels, and the slots go to the rest of the frame.
+- **Shipped:** 16 plane pairs + 6 per face. `eval-real`: 3.22 / **3.12** alone (was 3.12 / 4.28),
+  3.23 / 3.18 with 3 manual points. In the panel (browser preview, same frames): 22 pairs, 6 on
+  the face, 1.4 s.
+- Not covered: two or more people in frame (the planes decide which face is which; untested on
+  real footage), and faces small enough that YuNet misses them in a wide shot.

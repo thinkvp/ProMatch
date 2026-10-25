@@ -40,14 +40,27 @@ static int checkEmbedded(const char* cubePath, const char* textPath) {
     }
     double maxDiff = 0;
     for (size_t i = 0; i < cube.data.size(); i++) maxDiff = std::max(maxDiff, double(std::fabs(cube.data[i] - lut->data[i])));
-    // "PMLUT0" is no LUT, and foreign bytes are rejected.
+    // What the LUT button stores: the effect's own encoding of the .cube, decoded back.
+    pm::Lut3D again;
+    const std::string mine = pm::toEmbeddedText(cube, 0, lut->name);
+    double reDiff = 1;
+    if (pm::parseEmbeddedText(mine, again) && again.size == cube.size && again.name == lut->name) {
+        reDiff = 0;
+        for (size_t i = 0; i < cube.data.size(); i++) reDiff = std::max(reDiff, double(std::fabs(cube.data[i] - again.data[i])));
+    }
+    // "PMLUT0" is no LUT, "PMLUTP <n>" the calibration pattern, and foreign bytes are rejected.
     const std::vector<uint8_t> none = pm::toUtf16("PMLUT0");
     const bool noneOk = !pm::embeddedLut(none.data(), none.size());
+    const std::vector<uint8_t> pat = pm::toUtf16("PMLUTP 17");
+    auto probe = pm::embeddedLut(pat.data(), pat.size());
+    const bool patternOk = probe && probe->probe == 17 && probe->size == 0;
     const char junk[] = "<Lumetri>not ours</Lumetri>";
     const bool junkOk = !pm::embeddedLut(junk, sizeof(junk) - 1);
-    std::printf("{\"size\":%d,\"paramBytes\":%zu,\"maxDiff255\":%.5f,\"emptyIsNone\":%s,\"foreignRejected\":%s}\n",
-                lut->size, param.size(), maxDiff * 255, noneOk ? "true" : "false", junkOk ? "true" : "false");
-    return noneOk && junkOk && maxDiff * 255 < 0.01 ? 0 : 1;
+    std::printf("{\"size\":%d,\"id\":%ld,\"name\":\"%s\",\"paramBytes\":%zu,\"maxDiff255\":%.5f,\"reencodedDiff255\":%.5f,"
+                "\"emptyIsNone\":%s,\"pattern\":%s,\"foreignRejected\":%s}\n",
+                lut->size, lut->id, lut->name.c_str(), param.size(), maxDiff * 255, reDiff * 255, noneOk ? "true" : "false",
+                patternOk ? "true" : "false", junkOk ? "true" : "false");
+    return noneOk && patternOk && junkOk && maxDiff * 255 < 0.01 && reDiff * 255 < 0.01 ? 0 : 1;
 }
 
 int main(int argc, char** argv) {

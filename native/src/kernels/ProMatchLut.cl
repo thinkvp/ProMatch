@@ -9,15 +9,31 @@ float pmUnit(float v, float lo, float hi) {
 }
 
 // One BGRA pixel of a Premiere GPU frame: 4 floats, or 4 halves when is16f.
-// src and dst may be the same frame. Pitches are in pixels.
+// src and dst may be the same frame. Pitches are in pixels. probe > 0 draws
+// the calibration pattern (n = probe, in a probeCols x probeRows grid) instead.
 __kernel void ProMatchLut(__global const void* src, int srcPitch, __global void* dst, int dstPitch, int is16f,
                           int width, int height, __global const float* lut, int size, float dminR, float dminG,
-                          float dminB, float dmaxR, float dmaxG, float dmaxB, float amount) {
+                          float dminB, float dmaxR, float dmaxG, float dmaxB, float amount,
+                          int probe, int probeCols, int probeRows) {
     const int x = get_global_id(0);
     const int y = get_global_id(1);
     if (x >= width || y >= height) return;
     const size_t si = (size_t)y * srcPitch + x;
     const size_t di = (size_t)y * dstPitch + x;
+
+    // Calibration pattern (pm::probeColour in lut_engine.cpp): replaces the picture.
+    if (probe > 0) {
+        const int idx = (int)((long)y * probeRows / height) * probeCols + (int)((long)x * probeCols / width);
+        const float k = 1.f / (float)(probe - 1);
+        float4 q = (float4)(0.f, 0.f, 0.f, 1.f);
+        if (idx < probe * probe * probe)
+            q = (float4)((float)(idx / (probe * probe)) * k, (float)(idx / probe % probe) * k, (float)(idx % probe) * k, 1.f);
+        if (is16f)
+            vstore_half4_rte(q, di, (__global half*)dst);
+        else
+            ((__global float4*)dst)[di] = q;
+        return;
+    }
 
     const float4 p = is16f ? vload_half4(si, (__global const half*)src) : ((__global const float4*)src)[si];
     const float b = p.x, g = p.y, r = p.z, a = p.w;

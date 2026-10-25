@@ -45,7 +45,7 @@ for (const f of files) {
     source: sampleDisc(src, p.source.x, p.source.y, pointRadius(s, src.width, p.source)),
     target: sampleDisc(tgt, p.target.x, p.target.y, pointRadius(s, tgt.width, p.target)),
   }))
-  const geo = suggestFromMatches(matchFeatures(cv, src, tgt), src, tgt, { maxPairs: 400, perPlane: 400, gridStep: 1 / 96, maxSpread: 0.03, reach: 0.06, support: 3 })
+  const geo = suggestFromMatches(matchFeatures(cv, src, tgt), src, tgt, { maxPairs: 400, perPlane: 400, gridStep: 1 / 96, maxSpread: 0.03, reach: 0.06, support: 3, planeMin: 20, maxPlanes: 4, perFace: 0 })
   const away = 0.04 * src.width
   const r = Math.max(5, src.width / 160)
   const dense = geo.suggestions

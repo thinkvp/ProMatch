@@ -144,12 +144,14 @@ export function applyLutToPixels(lut: Lut3D, px: Uint8ClampedArray | Uint8Array)
 
 /**
  * The LUT as text for the ProMatch effect's embedded "LUT" parameter:
- * "PMLUT1 <size> <lo> <hi> <base64>", the data being size³ × 3 little-endian
- * uint16 values mapped linearly onto [lo, hi] (red fastest). About a third of
- * the .cube's size, and exact to 1/65535 of the range. The effect parses it in
- * native/src/lut_engine.cpp (scanEmbedded).
+ * "PMLUT3 <id> <name> <size> <lo> <hi> <base64>", the data being size³ × 3
+ * little-endian uint16 values mapped linearly onto [lo, hi] (red fastest),
+ * id the match ID, which is how Apply finds every clip using this match, and
+ * name what Effect Controls shows (percent-encoded, "-" for none). About a
+ * third of the .cube's size, and exact to 1/65535 of the range. The effect
+ * parses it in native/src/lut_engine.cpp (parseEmbeddedText).
  */
-export function toEmbeddedText(lut: Lut3D): string {
+export function toEmbeddedText(lut: Lut3D, id: number, name = ''): string {
   let lo = Infinity
   let hi = -Infinity
   for (const v of lut.data) {
@@ -169,13 +171,32 @@ export function toEmbeddedText(lut: Lut3D): string {
   }
   let bin = ''
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return `PMLUT1 ${lut.size} ${lo.toPrecision(9)} ${hi.toPrecision(9)} ${btoa(bin)}`
+  return `PMLUT3 ${Math.round(id)} ${encodeName(name)} ${lut.size} ${lo.toPrecision(9)} ${hi.toPrecision(9)} ${btoa(bin)}`
 }
 
-/** Inverse of toEmbeddedText; null for "PMLUT0" (no LUT). */
+/** Percent-encoded UTF-8 with nothing but [A-Za-z0-9._~-], as the effect decodes it. */
+function encodeName(name: string): string {
+  if (!name) return '-'
+  return encodeURIComponent(name).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+/** The match ID in an effect's LUT text, or null (none, a pattern, a build-6 "PMLUT1", or 0: picked in Effect Controls). */
+export function embeddedId(text: string): number | null {
+  const m = /^PMLUT[23] (\d+) /.exec(text)
+  return m && m[1] !== '0' ? parseInt(m[1], 10) : null
+}
+
+/** The LUT's name in an effect's LUT text ("" if none). */
+export function embeddedName(text: string): string {
+  const m = /^PMLUT3 \d+ (\S+) /.exec(text)
+  return m && m[1] !== '-' ? decodeURIComponent(m[1]) : ''
+}
+
+/** Inverse of toEmbeddedText (also reads build-6 "PMLUT1"); null for "PMLUT0" (no LUT). */
 export function parseEmbeddedText(text: string): Lut3D | null {
   if (text.startsWith('PMLUT0')) return null
-  const m = /^PMLUT1 (\d+) (\S+) (\S+) (\S+)/.exec(text)
+  const m =
+    /^PMLUT3 \d+ \S+ (\d+) (\S+) (\S+) (\S+)/.exec(text) ?? /^PMLUT2 \d+ (\d+) (\S+) (\S+) (\S+)/.exec(text) ?? /^PMLUT1 (\d+) (\S+) (\S+) (\S+)/.exec(text)
   if (!m) throw new Error('not a ProMatch LUT')
   const size = parseInt(m[1], 10)
   const lo = Math.fround(parseFloat(m[2]))

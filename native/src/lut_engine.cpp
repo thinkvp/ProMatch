@@ -1,13 +1,13 @@
 #include "lut_engine.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdarg>
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <thread>
 
@@ -208,6 +208,102 @@ void applyF(const Lut3D& lut, const ImageF& src, const ImageF& dst, float amount
     });
 }
 
+// --------------------------------------------------------------- names
+
+static std::string percentDecode(const std::string& s) {
+    if (s == "-") return std::string();
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            int v = 0;
+            if (std::sscanf(s.substr(i + 1, 2).c_str(), "%2x", &v) == 1) {
+                out.push_back(char(v));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+static std::string percentEncode(const std::string& s) {
+    if (s.empty()) return "-";
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back(char(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[c >> 4]);
+            out.push_back(hex[c & 15]);
+        }
+    }
+    return out;
+}
+
+// ------------------------------------------------------ calibration pattern
+
+void probeGrid(int n, int width, int height, int* cols, int* rows) {
+    const int count = n * n * n;
+    const double aspect = height > 0 ? double(width) / height : 1.0;
+    *cols = std::max(1, int(std::ceil(std::sqrt(count * aspect))));
+    *rows = (count + *cols - 1) / *cols;
+}
+
+void probeColour(int n, int cols, int rows, int width, int height, int x, int y, float out[3]) {
+    const int col = int((long long)x * cols / width);
+    const int row = int((long long)y * rows / height);
+    const int idx = row * cols + col;
+    if (idx >= n * n * n) {
+        out[0] = out[1] = out[2] = 0.f;
+        return;
+    }
+    const float k = 1.f / float(n - 1);
+    out[0] = float(idx % n) * k;
+    out[1] = float(idx / n % n) * k;
+    out[2] = float(idx / (n * n)) * k;
+}
+
+void fillProbe8(int n, const Image8& dst) {
+    int cols, rows;
+    probeGrid(n, dst.width, dst.height, &cols, &rows);
+    const Offsets d_o = offsetsOf(dst.layout);
+    parallelRows(dst.height, [&](int y0, int y1) {
+        for (int y = y0; y < y1; y++) {
+            uint8_t* dp = dst.data + y * dst.rowBytes;
+            for (int x = 0; x < dst.width; x++, dp += 4) {
+                float c[3];
+                probeColour(n, cols, rows, dst.width, dst.height, x, y, c);
+                dp[d_o.r] = to8(c[0]);
+                dp[d_o.g] = to8(c[1]);
+                dp[d_o.b] = to8(c[2]);
+                dp[d_o.a] = 255;
+            }
+        }
+    });
+}
+
+void fillProbeF(int n, const ImageF& dst) {
+    int cols, rows;
+    probeGrid(n, dst.width, dst.height, &cols, &rows);
+    const Offsets d_o = offsetsOf(dst.layout);
+    parallelRows(dst.height, [&](int y0, int y1) {
+        for (int y = y0; y < y1; y++) {
+            float* dp = reinterpret_cast<float*>(reinterpret_cast<char*>(dst.data) + y * dst.rowBytes);
+            for (int x = 0; x < dst.width; x++, dp += 4) {
+                float c[3];
+                probeColour(n, cols, rows, dst.width, dst.height, x, y, c);
+                dp[d_o.r] = c[0];
+                dp[d_o.g] = c[1];
+                dp[d_o.b] = c[2];
+                dp[d_o.a] = 1.f;
+            }
+        }
+    });
+}
+
 // ------------------------------------------------------------ embedded LUTs
 
 std::string embeddedText(const void* bytes, size_t len) {
@@ -237,12 +333,33 @@ bool parseEmbeddedText(const std::string& text, Lut3D& out, std::string* error) 
     };
     out = Lut3D();
     if (text.compare(0, 6, "PMLUT0") == 0) return true;
+    const std::string head = text.substr(0, 96);
+    if (text.compare(0, 6, "PMLUTP") == 0) {
+        int n = 0;
+        if (std::sscanf(head.c_str(), "PMLUTP %d", &n) != 1 || n < 2 || n > 64) return fail("bad calibration pattern size");
+        out.probe = n;
+        return true;
+    }
     int size = 0;
     float lo = 0, hi = 0;
+    long id = 0;
     int consumed = 0;
-    const std::string head = text.substr(0, 96);
-    if (std::sscanf(head.c_str(), "PMLUT1 %d %f %f %n", &size, &lo, &hi, &consumed) != 3 || consumed <= 0)
-        return fail("not a ProMatch LUT (expected PMLUT1 <size> <lo> <hi> <data>)");
+    if (text.compare(0, 6, "PMLUT3") == 0) {
+        char name[400] = {};
+        if (std::sscanf(head.c_str(), "PMLUT3 %ld %399s %d %f %f %n", &id, name, &size, &lo, &hi, &consumed) != 5 || consumed <= 0) {
+            // The name can be long: parse from the full header line.
+            const std::string line = text.substr(0, std::min<size_t>(text.size(), 1200));
+            if (std::sscanf(line.c_str(), "PMLUT3 %ld %399s %d %f %f %n", &id, name, &size, &lo, &hi, &consumed) != 5 || consumed <= 0)
+                return fail("not a ProMatch LUT (expected PMLUT3 <id> <name> <size> <lo> <hi> <data>)");
+        }
+        out.name = percentDecode(name);
+    } else if (text.compare(0, 6, "PMLUT2") == 0) {
+        if (std::sscanf(head.c_str(), "PMLUT2 %ld %d %f %f %n", &id, &size, &lo, &hi, &consumed) != 4 || consumed <= 0)
+            return fail("not a ProMatch LUT (expected PMLUT2 <id> <size> <lo> <hi> <data>)");
+    } else if (std::sscanf(head.c_str(), "PMLUT1 %d %f %f %n", &size, &lo, &hi, &consumed) != 3 || consumed <= 0) {
+        return fail("not a ProMatch LUT (expected PMLUT2 <id> <size> <lo> <hi> <data>)");
+    }
+    out.id = id;
     if (size < 2 || size > 129) return fail("LUT size out of range");
     const size_t values = size_t(size) * size * size * 3;
     int dec[256];
@@ -279,6 +396,37 @@ bool parseEmbeddedText(const std::string& text, Lut3D& out, std::string* error) 
     return true;
 }
 
+std::string toEmbeddedText(const Lut3D& lut, long id, const std::string& name) {
+    float lo = 0, hi = 1;
+    if (!lut.data.empty()) {
+        lo = *std::min_element(lut.data.begin(), lut.data.end());
+        hi = *std::max_element(lut.data.begin(), lut.data.end());
+    }
+    if (!(hi > lo)) hi = lo + 1;
+    std::vector<uint8_t> bytes(lut.data.size() * 2);
+    const double scale = 65535.0 / (double(hi) - double(lo));
+    for (size_t i = 0; i < lut.data.size(); i++) {
+        const long q = std::lround((double(lut.data[i]) - lo) * scale);
+        const uint16_t v = uint16_t(q < 0 ? 0 : (q > 65535 ? 65535 : q));
+        bytes[2 * i] = uint8_t(v & 255);
+        bytes[2 * i + 1] = uint8_t(v >> 8);
+    }
+    static const char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string b64;
+    b64.reserve((bytes.size() + 2) / 3 * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const uint32_t n = (uint32_t(bytes[i]) << 16) | (i + 1 < bytes.size() ? uint32_t(bytes[i + 1]) << 8 : 0) |
+                           (i + 2 < bytes.size() ? uint32_t(bytes[i + 2]) : 0);
+        b64.push_back(kB64[(n >> 18) & 63]);
+        b64.push_back(kB64[(n >> 12) & 63]);
+        b64.push_back(i + 1 < bytes.size() ? kB64[(n >> 6) & 63] : '=');
+        b64.push_back(i + 2 < bytes.size() ? kB64[n & 63] : '=');
+    }
+    char head[96];
+    std::snprintf(head, sizeof(head), " %d %.9g %.9g ", lut.size, double(lo), double(hi));
+    return "PMLUT3 " + std::to_string(id) + " " + percentEncode(name) + head + b64;
+}
+
 // Fast content hash for the cache (64-bit words, multiply-xorshift).
 static uint64_t contentHash(const uint8_t* p, size_t n) {
     uint64_t h = 0x9E3779B97F4A7C15ull ^ n;
@@ -309,7 +457,7 @@ std::shared_ptr<const Lut3D> embeddedLut(const void* bytes, size_t len, std::str
         if (error) *error = "parameter does not hold PMLUT text";
     } else {
         lut = std::make_shared<Lut3D>();
-        if (!parseEmbeddedText(text, *lut, error) || lut->size == 0) lut.reset();
+        if (!parseEmbeddedText(text, *lut, error) || (lut->size == 0 && lut->probe == 0)) lut.reset();
     }
     std::lock_guard<std::mutex> lock(mu);
     recent.emplace_back(key, lut);
@@ -317,7 +465,7 @@ std::shared_ptr<const Lut3D> embeddedLut(const void* bytes, size_t len, std::str
     return lut;
 }
 
-// -------------------------------------------------------------- file + cache
+// --------------------------------------------------------------------- files
 
 #ifdef _WIN32
 static const wchar_t kSep = L'\\';
@@ -339,8 +487,30 @@ std::wstring dataPath(const std::wstring& rel) {
     return base + kSep + L"ProMatch" + kSep + rel;
 }
 
-std::wstring lutPath(long id) {
-    return dataPath(std::wstring(L"luts") + kSep + std::to_wstring(id) + L".cube");
+std::wstring lutFolder() {
+#ifdef _WIN32
+    FILE* f = _wfopen(dataPath(L"lut-folder.txt").c_str(), L"rb");
+    if (f) {
+        char buf[2048] = {};
+        const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        std::string utf8(buf, n);
+        while (!utf8.empty() && (utf8.back() == '\n' || utf8.back() == '\r' || utf8.back() == ' ')) utf8.pop_back();
+        if (!utf8.empty()) {
+            const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), nullptr, 0);
+            std::wstring w(size_t(len), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), &w[0], len);
+            if (GetFileAttributesW(w.c_str()) != INVALID_FILE_ATTRIBUTES) return w;
+        }
+    }
+    PWSTR docs = nullptr;
+    std::wstring out;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) out = std::wstring(docs) + L"\\ProMatch LUTs";
+    CoTaskMemFree(docs);
+    return out;
+#else
+    return std::wstring();
+#endif
 }
 
 void logLine(const char* fmt, ...) {
@@ -363,72 +533,6 @@ void logLine(const char* fmt, ...) {
     if (!f) return;
     std::fprintf(f, "%s  %s\n", stamp, msg);
     std::fclose(f);
-}
-
-static bool readFile(const std::wstring& path, std::string& out, long long& mtime, long long& size) {
-#ifdef _WIN32
-    struct _stat64 st;
-    if (_wstat64(path.c_str(), &st) != 0) return false;
-    FILE* f = _wfopen(path.c_str(), L"rb");
-#else
-    std::string narrow(path.begin(), path.end());
-    struct stat st;
-    if (stat(narrow.c_str(), &st) != 0) return false;
-    FILE* f = std::fopen(narrow.c_str(), "rb");
-#endif
-    if (!f) return false;
-    mtime = (long long)st.st_mtime;
-    size = (long long)st.st_size;
-    out.resize(size_t(size));
-    size_t got = size ? std::fread(&out[0], 1, size_t(size), f) : 0;
-    std::fclose(f);
-    return got == size_t(size);
-}
-
-static bool statFile(const std::wstring& path, long long& mtime, long long& size) {
-#ifdef _WIN32
-    struct _stat64 st;
-    if (_wstat64(path.c_str(), &st) != 0) return false;
-#else
-    std::string narrow(path.begin(), path.end());
-    struct stat st;
-    if (stat(narrow.c_str(), &st) != 0) return false;
-#endif
-    mtime = (long long)st.st_mtime;
-    size = (long long)st.st_size;
-    return true;
-}
-
-struct CacheEntry {
-    long revision = -1;
-    long long mtime = 0, size = 0;
-    std::shared_ptr<const Lut3D> lut;
-};
-
-std::shared_ptr<const Lut3D> cachedLut(long id, long revision, std::string* error) {
-    static std::mutex mu;
-    static std::map<long, CacheEntry> cache;
-    const std::wstring path = lutPath(id);
-    long long mtime = 0, size = 0;
-    if (!statFile(path, mtime, size)) {
-        if (error) *error = "LUT file not found";
-        return nullptr;
-    }
-    std::lock_guard<std::mutex> lock(mu);
-    CacheEntry& e = cache[id];
-    if (e.lut && e.revision == revision && e.mtime == mtime && e.size == size) return e.lut;
-    std::string text;
-    if (!readFile(path, text, mtime, size)) {
-        if (error) *error = "could not read LUT file";
-        return nullptr;
-    }
-    auto lut = std::make_shared<Lut3D>();
-    if (!parseCube(text, *lut, error)) return nullptr;
-    e.revision = revision;
-    e.mtime = mtime;
-    e.size = size;
-    e.lut = lut;
-    return lut;
 }
 
 }  // namespace pm

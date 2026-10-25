@@ -6,6 +6,7 @@
 import { type Analysis, analyse } from '../core/analysis.ts'
 import { suggestPairs } from '../core/auto.ts'
 import { type Vec3, toHex } from '../core/color.ts'
+import { type FaceMesh, detectFaces, faceMesh } from '../core/faces.ts'
 import { matchFeatures } from '../core/features.ts'
 import { findPlanes } from '../core/homography.ts'
 import {
@@ -22,6 +23,7 @@ import {
   strideFor,
 } from '../core/scopes.ts'
 import { suggestFromMatches } from '../core/geo-auto.ts'
+import { type Calibration, type ColourSetup, needsCalibration, probeText, readProbe, setupKey, setupName, workingLut } from '../core/calibrate.ts'
 import { type Lut3D, applyLutToPixels, bakeLut, toCube, toEmbeddedText } from '../core/lut.ts'
 import {
   DEFAULT_OPTIONS,
@@ -41,7 +43,7 @@ import { FrameView, type Marker, type ViewMode } from './frame-view.ts'
 import * as host from './host.ts'
 import { clearErrorBadge, log } from './log.ts'
 import * as node from './node.ts'
-import { loadOpenCv } from './opencv.ts'
+import { loadFaces, loadOpenCv } from './opencv.ts'
 import { type ScopeLayer, ScopesView, type ToneScope } from './scopes-view.ts'
 
 type Role = 'source' | 'target'
@@ -93,11 +95,15 @@ interface Frame {
   small: ImageData
   /** Built on first use by Auto. */
   analysis?: Analysis
+  /** The sequence's colour setup when it was captured; null when opened from a file or unknown. */
+  colour: ColourSetup | null
+  /** The clip it shows, with its effects and media colour space then; null when opened from a file. */
+  clip: host.CaptureClip | null
 }
 
 interface Session {
   version: 1
-  frames: Partial<Record<Role, { path: string; label: string }>>
+  frames: Partial<Record<Role, { path: string; label: string; colour?: ColourSetup | null; clip?: host.CaptureClip | null }>>
   pairs: Pair[]
   nextId: number
   opts: MatchOptions
@@ -108,7 +114,7 @@ interface Session {
   lutSize: number
   lutName: string
   lutNameAuto: boolean
-  /** Which %APPDATA%ProMatchluts<id>.cube the native effect reads for this match. */
+  /** The match ID the effect's LUT text carries, so Apply updates the same clips. */
   matchId?: number
   /** 2 = options from after the old defaults (matrix, colour range 0.12, smoothing 0.03). */
   optsVersion?: number
@@ -181,6 +187,20 @@ function canvasOf(w: number, h: number): HTMLCanvasElement {
   return c
 }
 
+/** Decode an image URL to RGBA pixels (PNG captures carry no colour profile, so none is applied). */
+async function decodeImage(url: string): Promise<RgbaImage> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new Image()
+    i.onload = () => resolve(i)
+    i.onerror = () => reject(new Error('Could not decode the captured frame'))
+    i.src = url
+  })
+  const c = canvasOf(img.naturalWidth, img.naturalHeight)
+  const ctx = c.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(img, 0, 0)
+  return ctx.getImageData(0, 0, c.width, c.height)
+}
+
 function copyText(text: string): void {
   const ta = document.createElement('textarea')
   ta.value = text
@@ -218,6 +238,8 @@ export class App {
   /** The native effect's Match ID for the current frame pair; new frames, new ID. */
   private matchId: number | null = null
   private restoring = false
+  /** Measure the calibration afresh on the next Apply (set by each new target capture). */
+  private recalibrate = false
   /** Snapshots of `pairs` before each change, for Ctrl+Z / Ctrl+Shift+Z. */
   private undoStack: Pair[][] = []
   private redoStack: Pair[][] = []
@@ -257,6 +279,7 @@ export class App {
     await this.connectHost()
     await this.restore()
     this.update()
+    this.watchEditRequests()
   }
 
   // -------------------------------------------------------------- setup
@@ -414,15 +437,7 @@ export class App {
       this.scheduleSave()
     })
 
-    $('#clear-points').addEventListener('click', () => {
-      this.remember()
-      const n = this.pairs.length
-      log(`Cleared ${n} point(s). Ctrl+Z or Undo brings them back.`)
-      this.pairs = []
-      this.pendingId = null
-      this.selectedId = null
-      this.scheduleUpdate()
-    })
+    $('#clear-points').addEventListener('click', () => this.clearPoints(''))
     $('#apply').addEventListener('click', () => this.apply())
     $('#undo').addEventListener('click', () => this.undo())
     $('#redo').addEventListener('click', () => this.redo())
@@ -564,6 +579,8 @@ export class App {
       status.title = `Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`
       status.className = 'status ok'
       log(`Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`)
+      // The effect's Change LUT browses this project's LUT folder.
+      void this.lutFolder().then((f) => node.writeText(node.join(node.dataDir(), 'lut-folder.txt'), f.dir))
     } catch (e) {
       status.textContent = 'Host script failed'
       status.title = 'jsx/host.jsx did not load — open the Log'
@@ -575,7 +592,14 @@ export class App {
 
   // -------------------------------------------------------------- frames
 
-  private async loadImage(role: Role, url: string, label: string, path: string | null): Promise<void> {
+  private async loadImage(
+    role: Role,
+    url: string,
+    label: string,
+    path: string | null,
+    colour: ColourSetup | null = null,
+    clip: host.CaptureClip | null = null,
+  ): Promise<void> {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const i = new Image()
       i.onload = () => resolve(i)
@@ -597,7 +621,7 @@ export class App {
 
     const prev = this.frames[role]
     if (!this.restoring) this.matchId = null
-    this.frames[role] = { label, path, width: w, height: h, pixels, full, small: sctx.getImageData(0, 0, sw, sh) }
+    this.frames[role] = { label, path, width: w, height: h, pixels, full, small: sctx.getImageData(0, 0, sw, sh), colour, clip }
     if (prev && (prev.width !== w || prev.height !== h)) {
       // Different frame size: rescale this side's points so they stay on the same features.
       for (const p of this.pairs) {
@@ -611,9 +635,62 @@ export class App {
     const el = this.frameEl(role)
     el.classList.add('loaded')
     this.areas = null
-    $('[data-meta]', el).textContent = label
-    $('[data-meta]', el).title = path ?? label
+    $('[data-meta]', el).textContent = colour ? `${label} · ${setupName(colour)}` : label
+    $('[data-meta]', el).title = `${path ?? label}${colour ? `
+Captured in ${setupName(colour)} colour management` : ''}`
+    const other = this.frames[role === 'source' ? 'target' : 'source']
+    if (!this.restoring && colour && other?.colour && setupKey(colour) !== setupKey(other.colour)) {
+      log(`The ${role} was captured in ${setupName(colour)} but the ${role === 'source' ? 'target' : 'source'} in ${setupName(other.colour)}: recapture it so both see the same colour management.`, 'warn')
+    }
+    const raw = this.unconverted()
+    if (!this.restoring && raw) log(raw.replace(/<[^>]+>/g, ''), 'warn')
+    if (!this.restoring && clip?.vignette) log(`The ${role} has a Lumetri vignette (amount ${clip.vignette.toFixed(2)}): see the hint.`, 'warn')
     $('[data-empty]', el).hidden = true
+    this.scheduleUpdate()
+  }
+
+  /**
+   * Log footage converted on one side only: one clip has effects (a Lumetri
+   * with the camera LUT), the other has none, and both are log media. The
+   * bare one is still log, and a match can't stand in for a log conversion:
+   * its contrast hits the limit and the colours can't follow. Null if fine.
+   */
+  private unconverted(): string | null {
+    const s = this.frames.source?.clip
+    const t = this.frames.target?.clip
+    if (!s?.effects || !t?.effects || !s.media?.sceneReferred || !t.media?.sceneReferred) return null
+    const [has, bare, bareRole] = s.effects.length && !t.effects.length ? [s, t, 'target'] : !s.effects.length && t.effects.length ? [t, s, 'source'] : [null, null, '']
+    if (!has || !bare) return null
+    return (
+      `<b>The ${bareRole} is still log.</b> ${escapeHtml(has.name)} has ${escapeHtml(has.effects!.join(', '))} on it, ` +
+      `${escapeHtml(bare.name)} has nothing, and both are ${escapeHtml(bare.media!.name)}. Give ${escapeHtml(bare.name)} the same conversion ` +
+      `(e.g. the same LUT in Lumetri), then capture the ${bareRole} again: ProMatch matches two cameras, it can't do the log conversion as well.`
+    )
+  }
+
+  /**
+   * A vignette on either clip when it was captured: it darkens (or lightens)
+   * the edges, which no LUT can copy, and skews every point near them.
+   */
+  private vignetted(): string | null {
+    const on = ROLES.filter((r) => this.frames[r]?.clip?.vignette)
+    if (!on.length) return null
+    const names = on.map((r) => `the ${r} (${escapeHtml(this.frames[r]!.clip!.name)})`).join(' and ')
+    return (
+      `<b>Vignette on ${names}.</b> It changes the edges of the frame, which a LUT can't copy, so points near the edges mislead the match. ` +
+      `Switch it off while you capture (Lumetri ▸ Vignette), capture again, then switch it back on.`
+    )
+  }
+
+  /** Remove every point (undoable). `why` goes in the log line. */
+  private clearPoints(why: string): void {
+    const n = this.pairs.length
+    if (!n) return
+    this.remember()
+    log(`Cleared ${n} point(s)${why}. Ctrl+Z or Undo brings them back.`)
+    this.pairs = []
+    this.pendingId = null
+    this.selectedId = null
     this.scheduleUpdate()
   }
 
@@ -622,10 +699,16 @@ export class App {
       const base = node.join(node.capturesDir(), `${role}-${Date.now()}`)
       log(`Capturing ${role} frame…`)
       const info = await host.captureFrame(base)
+      // The colour setup it was captured under: Apply checks it hasn't changed since.
+      const colour = await host.sequenceColour().catch(() => null)
       const file = await node.waitForFile([`${base}.png`, base])
       const who = info.clip ? info.clip.name : info.sequence
       const label = `${who} @ ${info.timecode}${info.clip?.multicam ? ' (multicam)' : ''}`
-      await this.loadImage(role, node.readDataUrl(file), label, file)
+      await this.loadImage(role, node.readDataUrl(file), label, file, colour, info.clip)
+      // A new frame shows other things in other places: the old points don't belong on it.
+      this.clearPoints(` for the new ${role} frame`)
+      // A new target may be a new clip or setup: measure afresh on the next Apply.
+      if (role === 'target') this.recalibrate = true
       if (role === 'target' && info.clip) this.autoName(info.clip.name)
       log(`${role}: ${label}`)
     } catch (e) {
@@ -642,6 +725,7 @@ export class App {
       node.writeBytes(path, await f.arrayBuffer())
     }
     await this.loadImage(role, URL.createObjectURL(f), f.name, path)
+    this.clearPoints(` for the new ${role} frame`)
     if (role === 'target') this.autoName(f.name.replace(/\.[^.]+$/, ''))
   }
 
@@ -714,8 +798,10 @@ export class App {
    * First choice is geometric (geo-auto.ts): feature matching finds the same
    * physical spots in both frames, so every pair can be checked by eye. On a
    * real interview it scored ΔE 2.85 alone vs 4.35 for the colour method
-   * (spikes/SPIKES.md). Plain scenes with too little texture to match, or an
-   * OpenCV load failure, fall back to the colour method (auto.ts).
+   * (spikes/SPIKES.md). Faces add skin pairs from the face mesh (faces.ts);
+   * if the face models fail, Auto carries on without them. Plain scenes with
+   * too little texture to match, or an OpenCV load failure, fall back to the
+   * colour method (auto.ts).
    */
   private async runAuto(): Promise<void> {
     const src = this.frames.source
@@ -736,8 +822,17 @@ export class App {
       try {
         const cv = await loadOpenCv()
         const matches = matchFeatures(cv, src.pixels, tgt.pixels)
-        const geo = suggestFromMatches(matches, src.pixels, tgt.pixels)
-        how = `matched ${matches.length} features into ${geo.planes.length} area(s)`
+        let faces: { source: FaceMesh[]; target: FaceMesh[] } | undefined
+        try {
+          const models = await loadFaces(cv)
+          const meshes = (img: RgbaImage) => detectFaces(cv, models, img).slice(0, 4).map((f) => faceMesh(cv, models, img, f))
+          faces = { source: meshes(src.pixels), target: meshes(tgt.pixels) }
+        } catch (e) {
+          log(`Auto: face models unavailable (${(e as Error).message}); no skin pairs from faces.`, 'warn')
+        }
+        const geo = suggestFromMatches(matches, src.pixels, tgt.pixels, undefined, faces)
+        const skin = geo.suggestions.filter((g) => g.plane < 0).length
+        how = `matched ${matches.length} features into ${geo.planes.length} area(s)${geo.faces ? `, ${skin} on ${geo.faces === 1 ? 'the face' : `${geo.faces} faces`}` : ''}`
         if (geo.suggestions.length >= 3) sug = geo.suggestions
         else log(`Auto: only ${geo.suggestions.length} pair(s) from feature matching (${how}); using colour matching instead.`, 'warn')
       } catch (e) {
@@ -1273,16 +1368,19 @@ export class App {
     let html: string
     if (!this.frames.source) html = '<span><b>Step 1.</b> Capture the <b>source</b>: the camera angle you want to match to.</span>'
     else if (!this.frames.target) html = '<span><b>Step 2.</b> Capture the <b>target</b>: the angle you want to fix.</span>'
+    else if (this.unconverted()) html = `<span>${this.unconverted()}</span>`
+    else if (this.vignetted()) html = `<span>${this.vignetted()}</span>`
     else if (pending && !pending.target) html = `<span>Now click the same spot on the <b>target</b> for point ${n}. <kbd>Esc</kbd> cancels.</span>`
     else if (pending && !pending.source) html = `<span>Now click the same spot on the <b>source</b> for point ${n}. <kbd>Esc</kbd> cancels.</span>`
     else if (!this.pairs.length)
       html = '<span><b>Step 3.</b> Press <b>Auto</b> for a starting set, or click something on the source and then the same thing on the target. Good picks: skin, a neutral wall, a strongly coloured object, dark clothing.</span>'
     else if (this.pairs.every((p) => p.auto))
-      html = '<span>Auto pairs are dashed. Check them, delete any that look wrong, then add <b>two or three of your own</b> on skin. That beats either on its own.</span>'
+      html = '<span>Auto pairs are dashed. Check them, delete any that look wrong, then add <b>a few of your own</b>, especially on plain areas Auto can’t reach.</span>'
     else if (!this.lastExport)
       html = '<span>Click to add a point, or drag out to draw a bigger one. Drag a point to move it, drag its edge to resize, right-click or <kbd>Del</kbd> to remove. <kbd>Space</kbd>+drag pans. When <b>After</b> looks right, select the target clip in the Timeline and press <b>Apply</b>.</span>'
     else html = '<span>Applied. Keep refining and press <b>Apply</b> again; the clips using this match update in place.</span>'
     el.innerHTML = html
+    el.classList.toggle('warn', !!this.frames.source && !!this.frames.target && !!(this.unconverted() || this.vignetted()))
   }
 
   // -------------------------------------------------------------- output
@@ -1295,6 +1393,8 @@ export class App {
     const m = this.model
     const comments = [
       'Generated by ProMatch',
+      // Read by the effect's Change LUT, so Edit LUT still finds this match.
+      ...(this.matchId === null ? [] : [`ProMatch match ${this.matchId}`]),
       `Created ${new Date().toISOString()}`,
       `Source: ${this.frames.source?.label ?? '-'}`,
       `Target: ${this.frames.target?.label ?? '-'}`,
@@ -1319,10 +1419,41 @@ export class App {
   }
 
   /**
-   * One click: write the LUT where the ProMatch effect reads it (by match ID)
-   * and beside the project, then put the effect on the selected clips, or
-   * update the clips already using this match. Without the effect installed,
-   * fall back to the Lumetri Browse… steps.
+   * Calibrations by sequence colour setup (working space and its switches),
+   * saved in %APPDATA%\ProMatch\calibration.json: measured once, then reused.
+   */
+  private calibrations(): Record<string, Calibration> {
+    try {
+      const p = node.join(node.dataDir(), 'calibration.json')
+      return node.exists(p) ? JSON.parse(node.readText(p)) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  /**
+   * Measure what Premiere does after the effect in this sequence
+   * (calibrate.ts): the effect on the target clips draws the test pattern,
+   * the Program Monitor frame is captured and read. The clips keep showing
+   * the pattern until the caller applies the real LUT.
+   */
+  private async calibrate(): Promise<Calibration> {
+    const base = node.join(node.capturesDir(), `calibration-${Date.now()}`)
+    await host.captureFrame(base)
+    const file = await node.waitForFile([`${base}.png`, base])
+    try {
+      return readProbe(await decodeImage(node.readDataUrl(file)))
+    } finally {
+      node.remove(file)
+    }
+  }
+
+  /**
+   * One click: save the LUT beside the project, then put the effect on the
+   * selected clips, or update the clips already using this match. In a
+   * scene-referred sequence (ACEScct...) the effect gets a LUT calibrated for
+   * its working space. Without the effect installed, fall back to the
+   * Lumetri Browse… steps.
    */
   private async apply(): Promise<void> {
     if (!this.model.used) {
@@ -1331,20 +1462,87 @@ export class App {
       return
     }
     if (!node.hasNode || !host.available) return this.exportLut()
+    if (this.matchId === null) {
+      this.matchId = node.newMatchId()
+      this.scheduleSave() // a reload must keep updating the same clips
+    }
     const lut = this.bakedLut()
     const text = this.cubeText(lut)
     const fileName = `${node.safeFileName(this.lutName)}.cube`
     try {
+      // The frames show the picture under the colour setup they were captured
+      // in. Under another one the same match would land on a different picture.
+      const colour = await host.sequenceColour().catch((e) => {
+        log(`Could not read the sequence's colour settings (${(e as Error).message}); applying for Rec.709.`, 'warn')
+        return null
+      })
+      const stale = colour ? ROLES.filter((role) => this.frames[role]?.colour && setupKey(this.frames[role]!.colour!) !== setupKey(colour)) : []
+      if (colour && stale.length) {
+        const was = this.frames[stale[0]]!.colour!
+        const what = stale.length === 2 ? 'Both frames were' : `The ${stale[0]} was`
+        log(`Not applied: ${what.toLowerCase()} captured in ${setupName(was)}, but ${colour.sequence} is now ${setupName(colour)}.`, 'warn')
+        this.showResult(
+          '<div class="er-title">Colour management changed</div>' +
+            `<p class="small">${what} captured with <b>${escapeHtml(setupName(was))}</b>, but sequence ${escapeHtml(colour.sequence)} now uses <b>${escapeHtml(setupName(colour))}</b>, so the match was made on a different-looking picture. ` +
+            `Capture the ${stale.length === 2 ? 'source and target' : stale[0]} again${stale.length === 2 ? '' : ' (and check the other frame looks right)'}, then press <b>Apply</b>.</p>`,
+          'warn',
+        )
+        return
+      }
       const folder = await this.lutFolder()
       const p = node.join(folder.dir, fileName)
       node.writeText(p, text)
       this.lastExport = p
-      if (this.matchId === null) {
-        this.matchId = node.newMatchId()
-        this.scheduleSave() // a reload must keep updating the same clips
+      const id = this.matchId
+      try {
+        this.saveMatch(folder.dir)
+      } catch (e) {
+        log(`Could not save the match for Edit LUT: ${(e as Error).message}`, 'warn')
       }
-      node.writeTextAtomic(node.effectLutPath(this.matchId), text)
-      const r = await host.applyMatch(this.matchId, toEmbeddedText(lut))
+      // The effect's LUT button browses this folder (native lut_engine.cpp lutFolder).
+      node.writeText(node.join(node.dataDir(), 'lut-folder.txt'), folder.dir)
+      let effectText = toEmbeddedText(lut, id, this.lutName)
+      // Colour-managed sequence: the effect sees working-space values.
+      let calNote: string | null = null
+      let calWarn: string | null = null
+      if (colour && needsCalibration(colour.working)) {
+        const key = setupKey(colour)
+        const saved = this.calibrations()
+        // Measured afresh after each new target capture (another clip, or
+        // something after the effect may have changed), else reused.
+        let cal: Calibration | null = this.recalibrate ? null : (saved[key] ?? null)
+        if (!cal) {
+          // Puts the effect on the clips too, showing the pattern for now.
+          const probe = await host.applyMatch(id, probeText())
+          if (!probe.missingEffect) {
+            log(`Calibrating for ${setupName(colour)} (sequence ${colour.sequence}): reading the test pattern…`)
+            try {
+              cal = await this.calibrate()
+              saved[key] = cal
+              node.writeTextAtomic(node.join(node.dataDir(), 'calibration.json'), JSON.stringify(saved))
+              this.recalibrate = false
+              log(`Calibrated for ${setupName(colour)}: pattern read ${(cal.fit * 100).toFixed(1)}% consistent${cal.flipped ? ' (upside down)' : ''}.`)
+            } catch (e) {
+              log(`Calibration failed: ${(e as Error).message}`, 'error')
+              cal = saved[key] ?? null
+              calWarn = cal
+                ? `Could not calibrate afresh (${escapeHtml((e as Error).message)}), so the calibration measured earlier for ${escapeHtml(setupName(colour))} was used.`
+                : `Could not calibrate for ${escapeHtml(setupName(colour))}: ${escapeHtml((e as Error).message)}. The match was applied as for Rec.709, so it will look wrong in this sequence until it is calibrated: fix that and press <b>Apply</b> again.`
+            }
+          }
+        }
+        if (cal) {
+          const t0 = performance.now()
+          effectText = toEmbeddedText(workingLut(cal, (c) => applyModel(this.model, c), this.lutSize), id, this.lutName)
+          calNote = `Calibrated for this sequence's <b>${escapeHtml(colour.working.name)}</b> working colour space.`
+          log(`Working-space LUT for ${colour.working.name} baked in ${Math.round(performance.now() - t0)} ms.`)
+        }
+      }
+      const r = await host.applyMatch(id, effectText)
+      // Reselecting makes Effect Controls show the LUT's new name, but only
+      // once Premiere has taken the change in: straight after, nothing
+      // happens; 0.6 s later it relabels (tested).
+      if (!r.missingEffect) setTimeout(() => void host.refreshEffectControls().catch(() => 0), 800)
       if (r.missingEffect) {
         log('The ProMatch effect is not installed in Premiere: showing the Lumetri steps instead.', 'warn')
         this.showLumetriSteps(p, folder.withProject, '<b>The ProMatch effect is not installed</b>, so apply it with Lumetri:')
@@ -1355,18 +1553,30 @@ export class App {
       log(`Applied match ${this.matchId}${r.revision === null || r.revision === undefined ? '' : ` rev ${r.revision}`}${r.clips.every((c) => c.embedded) ? ' (LUT stored in the effect)' : ''} to ${r.clips.length} clip(s): ${r.clips.map((c) => c.name).join(', ')}` +
         (r.failed?.length ? `; could not reach: ${r.failed.join(', ')}` : ''))
       const warnings: string[] = []
+      if (calWarn) warnings.push(calWarn)
       const loose = r.clips.filter((c) => !c.embedded)
       if (loose.length) {
-        log(`LUT not stored in the effect on ${loose.map((c) => `${c.name} (${c.lutNote})`).join(', ')}; it reads the AppData copy.`, 'warn')
-        warnings.push('The LUT could not be stored in the effect (old ProMatch effect build?), so this clip reads it from AppData and will not carry it to another computer.')
+        log(`LUT not stored in the effect on ${loose.map((c) => `${c.name} (${c.lutNote})`).join(', ')}.`, 'warn')
+        warnings.push(`The LUT could not be stored in the effect on ${loose.map((c) => escapeHtml(c.name)).join(', ')}, so it is not matched. Is the ProMatch effect up to date (build 7)?`)
       }
-      if (r.clips.some((c) => c.lumetriBefore))
-        warnings.push('A Lumetri Color sits <b>above</b> ProMatch on a clip, so the match is applied after that grade. Drag ProMatch above it in Effect Controls.')
+      // The target was captured with the effects it had then, so ProMatch must
+      // come after exactly those. Scripting can't read the real order (it
+      // lists ProMatch before a Lumetri that Effect Controls shows above it),
+      // but a ProMatch just added is always last: effects added to the clip
+      // since the capture then sit under the match.
+      const captured = this.frames.target?.clip
+      if (captured?.effects) {
+        for (const c of r.clips.filter((c) => c.added && c.name === captured.name)) {
+          const since = c.effects.filter((n) => !captured.effects!.includes(n))
+          if (since.length)
+            warnings.push(`${escapeHtml(since.join(', '))} was added to ${escapeHtml(c.name)} after the target was captured, so the match lands on top of it. Capture the target again, or drag ProMatch above it in Effect Controls.`)
+        }
+      }
       if (r.failed?.length) warnings.push(`Could not reach: ${r.failed.map(escapeHtml).join(', ')}.`)
       if (!folder.withProject) warnings.push('<b>This project has never been saved</b>, so its LUT copy went to Documents.')
       this.showResult(
         `<div class="er-title">Applied to ${r.clips.length} clip${r.clips.length === 1 ? '' : 's'}</div>` +
-          `<p class="small">${names.join(', ')}. Press <b>Apply</b> again after more tuning; it updates in place.</p>` +
+          `<p class="small">${names.join(', ')}. Press <b>Apply</b> again after more tuning; it updates in place.${calNote ? ` ${calNote}` : ''}</p>` +
           warnings.map((w) => `<p class="small">${w}</p>`).join('') +
           `<p class="small">LUT copy: <code>${escapeHtml(p)}</code><br><b>Multicam:</b> apply to the angle's clip inside the multicam <i>source</i> sequence, so every cut to that camera inherits it.</p>` +
           '<div class="button-row"><button data-r="reveal">Show in Explorer</button><button data-r="copy">Copy path</button></div>',
@@ -1511,7 +1721,7 @@ export class App {
     const frames: Session['frames'] = {}
     for (const role of ROLES) {
       const f = this.frames[role]
-      if (f?.path) frames[role] = { path: f.path, label: f.label }
+      if (f?.path) frames[role] = { path: f.path, label: f.label, colour: f.colour, clip: f.clip }
     }
     const s: Session = {
       version: 1,
@@ -1561,7 +1771,7 @@ export class App {
       ] as const) {
         const to = node.join(dir, `${role}${f.path!.slice(f.path!.lastIndexOf('.'))}`)
         node.copyFile(f.path!, to)
-        frames[role] = { path: to, label: f.label }
+        frames[role] = { path: to, label: f.label, colour: f.colour, clip: f.clip }
       }
       const s: Session = {
         version: 1,
@@ -1583,12 +1793,142 @@ export class App {
     }
   }
 
+  // ------------------------------------------------- saved matches (Edit LUT)
+
+  /** The folder a match is kept in: <LUT folder>\Matches\<name> [<id>]. */
+  private matchDir(lutDir: string, id: number): string | null {
+    const root = node.join(lutDir, 'Matches')
+    const found = node.listDir(root).find((n) => n.endsWith(` [${id}]`))
+    return found ? node.join(root, found) : null
+  }
+
+  /**
+   * Keep this match beside its LUT: both frames, the points and settings, so
+   * the effect's Edit LUT can bring it back into the panel. Renamed with the
+   * LUT, replaced on every Apply.
+   */
+  private saveMatch(lutDir: string): void {
+    const src = this.frames.source
+    const tgt = this.frames.target
+    if (!src?.path || !tgt?.path || this.matchId === null) return
+    const want = node.join(node.ensureDir(node.join(lutDir, 'Matches')), `${node.safeFileName(this.lutName)} [${this.matchId}]`)
+    const had = this.matchDir(lutDir, this.matchId)
+    if (had && had !== want) node.rename(had, want)
+    const dir = node.ensureDir(want)
+    const frames: Session['frames'] = {}
+    for (const [role, f] of [
+      ['source', src],
+      ['target', tgt],
+    ] as const) {
+      const name = `${role}${f.path!.slice(f.path!.lastIndexOf('.'))}`
+      if (node.join(dir, name) !== f.path) node.copyFile(f.path!, node.join(dir, name))
+      frames[role] = { path: name, label: f.label, colour: f.colour, clip: f.clip }
+    }
+    const s: Session = {
+      version: 1,
+      frames,
+      pairs: this.pairs,
+      nextId: this.nextId,
+      opts: this.opts,
+      radiusScale: this.radiusScale,
+      lutSize: this.lutSize,
+      lutName: this.lutName,
+      lutNameAuto: this.lutNameAuto,
+      matchId: this.matchId,
+      optsVersion: 2,
+    }
+    node.writeTextAtomic(node.join(dir, 'match.json'), JSON.stringify(s, null, 1))
+  }
+
+  /**
+   * The effect's Edit LUT writes %APPDATA%\ProMatch\edit-request.json with a
+   * match ID (and the helper extension opens this panel if it is closed).
+   * Load that match, and mark the request handled. A request from the last
+   * minute is honoured at start-up too: that is the helper opening the panel.
+   */
+  private watchEditRequests(): void {
+    if (!node.hasNode) return
+    const file = node.join(node.dataDir(), 'edit-request.json')
+    const opened = Date.now()
+    let seen = Date.now() - node.mtime(file) < 60_000 ? 0 : node.mtime(file)
+    setInterval(() => {
+      const m = node.mtime(file)
+      if (!m || m <= seen) return
+      seen = m
+      let r: { id: number; name?: string; handled?: boolean; reopened?: boolean }
+      try {
+        r = JSON.parse(node.readText(file))
+      } catch {
+        return
+      }
+      if (r.handled || !(r.id > 0)) return
+      // Premiere won't bring an open panel forward from behind another tab
+      // (Effect Controls, in the same group), but it does show a panel it
+      // opens. So close, and let the helper reopen this panel; the new one
+      // loads the match. Only while the helper is alive, or the panel would
+      // just vanish.
+      // A panel that has just opened is in front already.
+      if (!r.reopened && Date.now() - opened > 5000 && this.helperAlive()) {
+        this.save()
+        node.writeText(file, JSON.stringify({ ...r, reopened: true }))
+        host.closeSelf()
+        return
+      }
+      try {
+        node.writeText(file, JSON.stringify({ ...r, handled: true }))
+      } catch {
+        // Another reader has it open; it will be seen as handled next time.
+      }
+      seen = node.mtime(file)
+      void this.openMatch(r.id, r.name ?? '')
+    }, 700)
+  }
+
+  /** The helper extension (helper.html) touches this file every 2 s. */
+  private helperAlive(): boolean {
+    return Date.now() - node.mtime(node.join(node.dataDir(), 'helper-alive')) < 6000
+  }
+
+  private async openMatch(id: number, name: string): Promise<void> {
+    // Show the panel, also when it is open behind another one.
+    host.bringToFront()
+    const folder = await this.lutFolder()
+    const dir = this.matchDir(folder.dir, id)
+    if (!dir || !node.exists(node.join(dir, 'match.json'))) {
+      log(`Edit LUT: no saved match ${id}${name ? ` (${name})` : ''} in ${folder.dir}\\Matches.`, 'warn')
+      this.showResult(
+        `<div class="er-title">Can't open ${escapeHtml(name || 'that LUT')}</div><p class="small">Its match isn't saved in <code>${escapeHtml(folder.dir)}\\Matches</code>. Matches are kept from Apply onwards: one applied before, or with another project, isn't there.</p>`,
+        'warn',
+      )
+      return
+    }
+    if (this.matchId !== id && this.pairs.length && !window.confirm(`Open the match for ${name || 'this LUT'}? It replaces the frames and points in the panel now.`)) return
+    const s = JSON.parse(node.readText(node.join(dir, 'match.json'))) as Session
+    await this.loadSession(s, dir)
+    // Undo can't step back across frames.
+    this.undoStack = []
+    this.redoStack = []
+    this.selectTab('points')
+    this.update()
+    log(`Opened the match for ${s.lutName} (${dir}). Change it and press Apply to update the clips using it.`)
+  }
+
   private async restore(): Promise<void> {
-    this.restoring = true
+    if (!node.hasNode || !node.exists(this.sessionPath())) return
     try {
-      if (!node.hasNode || !node.exists(this.sessionPath())) return
       const s = JSON.parse(node.readText(this.sessionPath())) as Session
       if (s.version !== 1) return
+      await this.loadSession(s, null)
+      if (this.pairs.length) log(`Restored ${this.pairs.length} point pair(s) from the last session.`)
+    } catch (e) {
+      log(`Could not restore session: ${(e as Error).message}`, 'warn')
+    }
+  }
+
+  /** Load a saved session or match. Frame paths may be relative to `dir`. */
+  private async loadSession(s: Session, dir: string | null): Promise<void> {
+    this.restoring = true
+    try {
       this.opts = migrateOptions(s)
       this.radiusScale = s.radiusScale ?? 0
       this.lutSize = s.lutSize ?? this.lutSize
@@ -1601,13 +1941,14 @@ export class App {
         for (const p of this.pairs) for (const role of ROLES) if (p[role] && p[role]!.r === undefined) p[role]!.r = s.radius
       }
       this.nextId = s.nextId ?? this.pairs.length + 1
+      // Fresh frames: loadImage would otherwise rescale the points to the old ones' size.
+      this.frames = { source: null, target: null }
       for (const role of ROLES) {
         const f = s.frames?.[role]
-        if (f && node.exists(f.path)) await this.loadImage(role, node.readDataUrl(f.path), f.label, f.path)
+        if (!f) continue
+        const p = dir && !node.isAbsolute(f.path) ? node.join(dir, f.path) : f.path
+        if (node.exists(p)) await this.loadImage(role, node.readDataUrl(p), f.label, p, f.colour ?? null, f.clip ?? null)
       }
-      if (this.pairs.length) log(`Restored ${this.pairs.length} point pair(s) from the last session.`)
-    } catch (e) {
-      log(`Could not restore session: ${(e as Error).message}`, 'warn')
     } finally {
       this.restoring = false
       this.syncControls()

@@ -40,6 +40,47 @@ function _pmTicks(t) {
     return parseFloat(t.ticks);
 }
 
+/** A clip's effects in order, by display name, without the fixed Opacity and Motion (and ProMatch). `upTo`: stop before that index. */
+function _pmEffectNames(clip, upTo) {
+    var out = [];
+    var n = upTo === undefined ? clip.components.numItems : upTo;
+    for (var i = 0; i < n; i++) {
+        var mn = String(clip.components[i].matchName);
+        if (mn === "AE.ADBE Opacity" || mn === "AE.ADBE Motion" || mn.indexOf(PM_EFFECT_MATCH) !== -1) continue;
+        out.push(String(clip.components[i].displayName));
+    }
+    return out;
+}
+
+/**
+ * The amount of a switched-on Lumetri vignette on the clip, else null. In
+ * Lumetri's parameter list the Vignette section is a "Vignette" heading,
+ * then its "Active" switch, then "Amount".
+ */
+function _pmVignette(clip) {
+    for (var i = 0; i < clip.components.numItems; i++) {
+        var comp = clip.components[i];
+        if (String(comp.matchName).indexOf("Lumetri") === -1) continue;
+        var inSection = false;
+        var active = true;
+        for (var p = 0; p < comp.properties.numItems; p++) {
+            var name = String(comp.properties[p].displayName);
+            if (name === "Vignette") {
+                inSection = true;
+                continue;
+            }
+            if (!inSection) continue;
+            if (name === "Active") active = String(comp.properties[p].getValue()) === "true";
+            if (name === "Amount") {
+                var amount = Number(comp.properties[p].getValue());
+                if (active && Math.abs(amount) > 0.01) return amount;
+                break;
+            }
+        }
+    }
+    return null;
+}
+
 /** Topmost visible video clip under the playhead — what the frame shows. */
 function _pmClipAtPlayhead(seq) {
     if (!seq) return null;
@@ -54,7 +95,18 @@ function _pmClipAtPlayhead(seq) {
                 try {
                     multicam = !!(clip.projectItem && clip.projectItem.isMulticamClip && clip.projectItem.isMulticamClip());
                 } catch (e1) {}
-                return { name: clip.name, track: t + 1, multicam: multicam };
+                // Its effects and media colour space: the panel checks both
+                // frames had the same treatment (log converted on both, or neither).
+                var media = null;
+                try {
+                    var cs = clip.projectItem.getColorSpace();
+                    media = { name: String(cs.name), sceneReferred: !!cs.isSceneReferred };
+                } catch (e2) {}
+                var vignette = null;
+                try {
+                    vignette = _pmVignette(clip);
+                } catch (e3) {}
+                return { name: clip.name, track: t + 1, multicam: multicam, effects: _pmEffectNames(clip), media: media, vignette: vignette };
             }
         }
     }
@@ -203,7 +255,22 @@ function _pmParam(comp, name) {
     return null;
 }
 
-/** Every video clip in the sequence carrying a ProMatch effect with Match ID `id`. */
+/**
+ * The match ID of a ProMatch effect: from its LUT text ("PMLUT3 <id> ..." or
+ * "PMLUT2 <id> ...", effect build 7+; 0 for a LUT picked in Effect Controls),
+ * else the visible Match ID of builds up to 6. 0 if none.
+ */
+function _pmMatchIdOf(comp) {
+    var lutP = _pmParam(comp, "LUT");
+    if (lutP) {
+        var m = /^PMLUT[23] (\d+) /.exec(String(lutP.getValue()).substring(0, 32));
+        if (m) return Number(m[1]);
+    }
+    var mid = _pmParam(comp, "Match ID");
+    return mid ? Math.round(Number(mid.getValue())) : 0;
+}
+
+/** Every video clip in the sequence carrying a ProMatch effect with match ID `id`. */
 function _pmClipsWithMatch(seq, id) {
     var out = [];
     for (var t = 0; t < seq.videoTracks.numTracks; t++) {
@@ -211,28 +278,42 @@ function _pmClipsWithMatch(seq, id) {
         for (var c = 0; c < track.clips.numItems; c++) {
             var clip = track.clips[c];
             var fx = _pmFindEffect(clip);
-            if (!fx) continue;
-            var mid = _pmParam(fx.comp, "Match ID");
-            if (mid && Math.round(Number(mid.getValue())) === id) out.push({ clip: clip, track: t, index: c });
+            if (fx && _pmMatchIdOf(fx.comp) === id) out.push({ clip: clip, track: t, index: c });
         }
     }
     return out;
 }
 
-/** Is there a Lumetri Color before (so applied before) the ProMatch effect? */
-function _pmLumetriBefore(clip, fxIndex) {
-    for (var i = 0; i < fxIndex; i++) {
-        if (String(clip.components[i].matchName).indexOf("Lumetri") !== -1) return true;
-    }
-    return false;
+/**
+ * The active sequence's colour settings (Premiere 25+). In a scene-referred
+ * working space (ACEScct...) effects see working-space values, not the
+ * display picture, and the panel calibrates (src/core/calibrate.ts).
+ */
+function PM_sequenceColour() {
+    return _pmWrap(function () {
+        var seq = app.project.activeSequence;
+        if (!seq) throw new Error("No active sequence.");
+        var s = seq.getSettings();
+        var w = s.workingColorSpace;
+        var working = w
+            ? { name: String(w.name), isSceneReferred: !!w.isSceneReferred, primaries: Number(w.primaries), transfer: Number(w.transferCharacteristic), matrix: Number(w.matrixEquation) }
+            : { name: "Rec. 709", isSceneReferred: false, primaries: 1, transfer: 1, matrix: 0 };
+        return {
+            sequence: seq.name,
+            working: working,
+            autoToneMap: String(s.autoToneMapEnabled) === "true",
+            gamutCompression: String(s.autoInputGamutCompressionEnabled) === "true",
+            linearComposite: String(s.compositeLinearColor) === "true"
+        };
+    }, "");
 }
 
 /**
- * One-click apply. The panel has already written %APPDATA%\ProMatch\luts\<id>.cube.
- * Selected video clips get a ProMatch effect (added if missing, reused if
- * present) set to Match ID `id`. Every clip in the sequence already using
- * `id` is updated too. All of them get one new Revision, which is what makes
- * Premiere drop its cached frames and re-render.
+ * One-click apply. Selected video clips get a ProMatch effect (added if
+ * missing, reused if present) and its LUT parameter set to `lut`, the
+ * effect's LUT text, which carries the match ID `id`. Every clip in the
+ * sequence already using `id` is updated too. Setting the text re-renders.
+ * The panel also uses it to show the calibration pattern (`lut` "PMLUTP n").
  */
 function PM_applyMatch(argJson) {
     return _pmWrap(function (a) {
@@ -294,10 +375,10 @@ function PM_applyMatch(argJson) {
         for (var q = 0; q < targets.length; q++) {
             var clip = targets[q].clip;
             var fx = _pmFindEffect(clip);
-            var midP = _pmParam(fx.comp, "Match ID");
+            var midP = _pmParam(fx.comp, "Match ID");  // builds up to 6 only
             var revP = _pmParam(fx.comp, "Revision");
             var lutP = _pmParam(fx.comp, "LUT");
-            var before = Math.round(Number(midP.getValue()));
+            var before = _pmMatchIdOf(fx.comp);
             var embedded = false;
             var lutNote = lutP ? null : "no LUT parameter";
             if (lutP && a.lut) {
@@ -313,7 +394,7 @@ function PM_applyMatch(argJson) {
                     lutNote = String(e5);
                 }
             }
-            midP.setValue(id, true);
+            if (midP) midP.setValue(id, true);
             if (revP) revP.setValue(rev, true);
             var wasAdded = false;
             for (var x = 0; x < added.length; x++) if (added[x] === targets[q].track + ":" + targets[q].index) wasAdded = true;
@@ -324,11 +405,30 @@ function PM_applyMatch(argJson) {
                 previousId: before,
                 embedded: embedded,
                 lutNote: lutNote,
-                lumetriBefore: _pmLumetriBefore(clip, fx.index)
+                before: _pmEffectNames(clip, fx.index),
+                effects: _pmEffectNames(clip)
             });
         }
         return { missingEffect: false, revision: rev, clips: clips, failed: failed };
     }, argJson);
+}
+
+/**
+ * Make Effect Controls redraw the selected clips' effects, so the ProMatch
+ * effect relabels its LUT button: deselect and reselect them. Premiere asks
+ * effects to update their controls on that, not when a script changes a
+ * value or the playhead moves (tested, effect build 11). Must be its own
+ * evalScript call after the change, or Premiere redraws the old value.
+ */
+function PM_refreshEffectControls() {
+    return _pmWrap(function () {
+        var seq = app.project.activeSequence;
+        if (!seq) return 0;
+        var sel = _pmSelectedVideo(seq);
+        for (var i = 0; i < sel.length; i++) sel[i].clip.setSelected(false, true);
+        for (var j = 0; j < sel.length; j++) sel[j].clip.setSelected(true, true);
+        return sel.length;
+    }, "");
 }
 
 /** Describe a parameter value fully enough to compare a hand-set Lumetri with

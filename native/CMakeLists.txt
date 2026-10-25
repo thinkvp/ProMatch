@@ -122,7 +122,7 @@ target_include_directories(ProMatch PRIVATE
   ${PM_SDK_HEADERS} ${PM_SDK_HEADERS}/SP ${PM_SDK_HEADERS}/Win ${PM_SDK_HEADERS}/adobesdk
   ${PM_SDK_ROOT}/Util)
 target_compile_definitions(ProMatch PRIVATE MSWindows WIN32 _WINDOWS)
-target_link_libraries(ProMatch PRIVATE pm_lut shell32 ole32)
+target_link_libraries(ProMatch PRIVATE pm_lut shell32 ole32 comdlg32)
 set_target_properties(ProMatch PROPERTIES
   SUFFIX ".aex"
   LIBRARY_OUTPUT_DIRECTORY ${PM_OUT}

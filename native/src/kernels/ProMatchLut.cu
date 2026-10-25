@@ -11,15 +11,40 @@ __device__ __forceinline__ float pmUnit(float v, float lo, float hi) {
 }
 
 // One BGRA pixel of a Premiere GPU frame: 4 floats, or 4 halves when is16f.
-// src and dst may be the same frame. Pitches are in pixels.
+// src and dst may be the same frame. Pitches are in pixels. probe > 0 draws
+// the calibration pattern (n = probe, in a probeCols x probeRows grid) instead.
 extern "C" __global__ void ProMatchLut(const void* src, int srcPitch, void* dst, int dstPitch, int is16f, int width,
                                        int height, const float* __restrict__ lut, int size, float dminR, float dminG,
-                                       float dminB, float dmaxR, float dmaxG, float dmaxB, float amount) {
+                                       float dminB, float dmaxR, float dmaxG, float dmaxB, float amount,
+                                       int probe, int probeCols, int probeRows) {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
     const size_t si = (size_t)y * srcPitch + x;
     const size_t di = (size_t)y * dstPitch + x;
+
+    // Calibration pattern (pm::probeColour in lut_engine.cpp): replaces the picture.
+    if (probe > 0) {
+        const int idx = (int)((long long)y * probeRows / height) * probeCols + (int)((long long)x * probeCols / width);
+        const float k = 1.f / (float)(probe - 1);
+        float pr = 0.f, pg = 0.f, pb = 0.f;
+        if (idx < probe * probe * probe) {
+            pr = (float)(idx % probe) * k;
+            pg = (float)(idx / probe % probe) * k;
+            pb = (float)(idx / (probe * probe)) * k;
+        }
+        if (is16f) {
+            ushort4 h;
+            h.x = __half_as_ushort(__float2half_rn(pb));
+            h.y = __half_as_ushort(__float2half_rn(pg));
+            h.z = __half_as_ushort(__float2half_rn(pr));
+            h.w = __half_as_ushort(__float2half_rn(1.f));
+            ((ushort4*)dst)[di] = h;
+        } else {
+            ((float4*)dst)[di] = make_float4(pb, pg, pr, 1.f);
+        }
+        return;
+    }
 
     float b, g, r, a;
     if (is16f) {

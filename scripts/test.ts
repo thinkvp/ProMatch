@@ -11,13 +11,15 @@ import {
   luminance,
 } from '../src/core/color.ts'
 import { DEFAULT_OPTIONS, type MatchOptions, type PairInput, applyModel, crossValidate, disagreeing, fitMatch, reportPairs } from '../src/core/match.ts'
-import { bakeLut, parseCube, parseEmbeddedText, sampleLut, sampleLutTetra, toCube, toEmbeddedText } from '../src/core/lut.ts'
+import { bakeLut, embeddedId, embeddedName, parseCube, parseEmbeddedText, sampleLut, sampleLutTetra, toCube, toEmbeddedText } from '../src/core/lut.ts'
 import { sampleDisc } from '../src/core/sample.ts'
 import { analyse } from '../src/core/analysis.ts'
 import { type Qualifier, SKIN_HUE_DEG, convexHull, hueMap, hueToX, inQualifier, insidePolygon, isolate, lumaStats, parade, pixelIndices, qualifierPlanes, xToHue, ycbcr } from '../src/core/scopes.ts'
 import { suggestPairs } from '../src/core/auto.ts'
-import { suggestFromMatches } from '../src/core/geo-auto.ts'
+import type { FaceMesh } from '../src/core/faces.ts'
+import { facing, pairFaces, suggestFromMatches } from '../src/core/geo-auto.ts'
 import { type Correspondence, type Homography, type Pt, applyH, findPlanes, ransacHomography } from '../src/core/homography.ts'
+import { PROBE_N, needsCalibration, probeColour, probeLayout, readProbe, workingLut } from '../src/core/calibrate.ts'
 import { cameraB } from './synthetic.ts'
 
 let failures = 0
@@ -229,11 +231,11 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
       }
     }
   }
-  const embedded = toEmbeddedText(lut)
+  const embedded = toEmbeddedText(lut, 4242, 'ProMatch – C0779 (A)')
   const unpacked = parseEmbeddedText(embedded)!
   let embedDiff = 0
   for (let i = 0; i < lut.data.length; i++) embedDiff = Math.max(embedDiff, Math.abs(lut.data[i] - unpacked.data[i]))
-  check('embedded LUT text round-trips', unpacked.size === 33 && embedDiff * 255 < 0.01, `max ${(embedDiff * 255).toFixed(4)}/255, ${(embedded.length / 1024).toFixed(0)} KB vs .cube ${(toCube(lut, 't').length / 1024).toFixed(0)} KB`)
+  check('embedded LUT text round-trips, match ID included', unpacked.size === 33 && embedDiff * 255 < 0.01 && embeddedId(embedded) === 4242 && embeddedName(embedded) === 'ProMatch – C0779 (A)', `max ${(embedDiff * 255).toFixed(4)}/255, ${(embedded.length / 1024).toFixed(0)} KB vs .cube ${(toCube(lut, 't').length / 1024).toFixed(0)} KB`)
   check('33³ LUT reproduces the model (tetrahedral)', worstTetra < 1.5, `worst interpolation ΔE ${worstTetra.toFixed(2)}`)
 }
 
@@ -384,6 +386,93 @@ function heldOutError(opts: MatchOptions, train: Vec3[], test: Vec3[], cam: (c: 
   check('geometric auto: pairs are the same physical spot', res.suggestions.length >= 5 && mapErr < 1.5, `${res.suggestions.length} pairs from ${res.planes.length} plane(s), worst ${mapErr.toFixed(2)} px off`)
   check('  ...on flat patches, not edges', flat)
   check('  ...and they fix the scene colours', after < before * 0.3, `ΔE ${before.toFixed(2)} -> ${after.toFixed(2)}`)
+}
+
+{
+  // Calibration (calibrate.ts): a stand-in for an ACEScct sequence. The
+  // effect sees ACEScct-like log values; after it, "Premiere" decodes them,
+  // mixes the gamut, tone-maps and gamma-encodes for the display.
+  const toLinear = (v: number) => (v <= 0.155251 ? (v - 0.0729055) / 10.5402377 : 2 ** (v * 17.52 - 9.72))
+  const fromLinear = (l: number) => (l <= 0.0078125 ? 10.5402377 * l + 0.0729055 : (Math.log2(l) + 9.72) / 17.52)
+  const tone = (x: number) => Math.max(0, (x * 1.2) / (x + 0.2))
+  const gamut = [[1.45, -0.32, -0.13], [-0.08, 1.2, -0.12], [0.0, -0.1, 1.1]]
+  const display = (w: Vec3): Vec3 => {
+    const l = w.map(toLinear)
+    return gamut.map((row) => Math.min(1, tone(row[0] * l[0] + row[1] * l[1] + row[2] * l[2]) ** (1 / 2.4))) as Vec3
+  }
+  // The pattern as the effect draws it (lut_engine.cpp probeColour), seen through
+  // "Premiere", captured 8-bit and upside down (as a bottom-up GPU frame could be).
+  const W = 1920
+  const H = 1080
+  const { cols, rows } = probeLayout(PROBE_N, W, H)
+  const px = new Uint8ClampedArray(W * H * 4)
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = Math.floor((y * rows) / H) * cols + Math.floor((x * cols) / W)
+      const c = idx < PROBE_N ** 3 ? display(probeColour(PROBE_N, idx)) : display([0, 0, 0])
+      px.set([Math.round(c[0] * 255), Math.round(c[1] * 255), Math.round(c[2] * 255), 255], ((H - 1 - y) * W + x) * 4)
+    }
+  }
+  const cal = readProbe({ width: W, height: H, data: px })
+  // A match made on display values: a stop down, warmer, a little less contrast.
+  const match = (d: Vec3): Vec3 => cameraB(d, { exposure: -1, contrast: 0.9 })
+  const lut = workingLut(cal, match, 33)
+  // Footage-like working values: S-Log3 in ACEScct sits about 0.1-0.6, and
+  // real colours are near neutral (±0.08 per channel is already strongly
+  // saturated in ACEScct).
+  let before = 0
+  let after = 0
+  const errs: number[] = []
+  let k = 0
+  const out: Vec3 = [0, 0, 0]
+  for (let v = 0.15; v < 0.55; v += 0.05) {
+    for (let dr = -0.08; dr <= 0.081; dr += 0.04) {
+      for (let db = -0.08; db <= 0.081; db += 0.04) {
+        const w: Vec3 = [v + dr, v, v + db]
+        const [r, g, b] = w
+        const want = match(display(w))
+        sampleLutTetra(lut, r, g, b, out)
+        const e = deltaE(encodedToOklab(display(out)), encodedToOklab(want))
+        before += deltaE(encodedToOklab(match(w)), encodedToOklab(want)) // the display LUT applied to working values
+        after += e
+        errs.push(e)
+        k++
+      }
+    }
+  }
+  check('calibration: reads the pattern back, upside down', cal.flipped && cal.fit > 0.95, `fit ${cal.fit.toFixed(3)}`)
+  const p95 = [...errs].sort((x, y) => x - y)[Math.floor(0.95 * errs.length)]
+  check('  ...and the working-space LUT shows what the match asked for', after / k < 1 && p95 < 2.5, `ΔE ${(before / k).toFixed(1)} with the display LUT -> ${(after / k).toFixed(2)} (95% under ${p95.toFixed(2)}, worst ${Math.max(...errs).toFixed(1)} on a colour the display clips)`)
+  let refused = false
+  try {
+    readProbe({ width: 640, height: 360, data: new Uint8ClampedArray(640 * 360 * 4).map((_, i) => (i * 2654435761) % 251) })
+  } catch {
+    refused = true
+  }
+  check('  ...a frame that is not the pattern is refused', refused)
+  check('  ...Rec.709 needs none, ACEScct does', !needsCalibration({ name: 'Rec. 709', isSceneReferred: false }) && needsCalibration({ name: 'ACEScct', isSceneReferred: true }))
+}
+
+{
+  // Face meshes: a flat 468-point sheet stands in for the mesh, seen square
+  // on and turned 60° away (screen x shrinks by cos 60°, depth grows).
+  const sheet = (turn: number, ox = 0): FaceMesh => {
+    const pts: Pt[] = []
+    const z: number[] = []
+    for (let i = 0; i < 468; i++) {
+      const u = (i % 22) * 4
+      const v = Math.floor(i / 22) * 4
+      pts.push([ox + u * Math.cos(turn), v])
+      z.push(u * Math.sin(turn))
+    }
+    return { face: { box: [ox, 0, 88, 88], marks: [], score: 1 }, pts, z }
+  }
+  const square = facing(sheet(0), 200)
+  const turned = facing(sheet(Math.PI / 3), 200)
+  check('face mesh: facing is 1 square on, cos(angle) when turned', Math.abs(square - 1) < 1e-6 && Math.abs(turned - 0.5) < 0.02, `${square.toFixed(3)}, ${turned.toFixed(3)} at 60°`)
+  const one = pairFaces([sheet(0)], [sheet(0.2)], [])
+  const two = pairFaces([sheet(0), sheet(0, 500)], [sheet(0), sheet(0, 500)], [])
+  check('  ...one face each pairs them; several with no plane to place them pairs none', one.length === 1 && two.length === 0)
 }
 
 {
