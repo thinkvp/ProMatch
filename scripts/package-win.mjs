@@ -65,10 +65,10 @@ for (const f of PANEL_FILES) {
 cpSync(AEX, join(EFFECT, 'ProMatch.aex'))
 // Inside the panel folder, so they are covered by its signature: CEP rejects a
 // signed extension with files the signature doesn't list. The installer also
-// shows the EULA from the stage root.
+// shows the licence from the stage root.
 cpSync('THIRD-PARTY-NOTICES.md', join(PANEL, 'THIRD-PARTY-NOTICES.md'))
-cpSync('installer/EULA.txt', join(PANEL, 'EULA.txt'))
-cpSync('installer/EULA.txt', join(STAGE, 'EULA.txt'))
+cpSync('LICENSE', join(PANEL, 'LICENSE.txt'))
+cpSync('LICENSE', join(STAGE, 'LICENSE.txt'))
 
 let signed = false
 const signCmd = findTool('ZXPSIGNCMD', 'ZXPSignCmd', [join(ROOT, 'tools', 'ZXPSignCmd.exe')])

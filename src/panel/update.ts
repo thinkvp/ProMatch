@@ -2,9 +2,8 @@
  * Update check, same scheme as Syncitol: once a day ask GitHub for the latest
  * release and show a banner when it is newer than the running version.
  *
- * The source repo is private, and GitHub answers 404 to an anonymous request
- * for a private repo's releases, so releases are published to a separate
- * public repo that holds only installers and release notes (docs/RELEASING.md).
+ * The repo must stay public: GitHub answers 404 to an anonymous request for a
+ * private repo's releases.
  *
  * Everything fails quietly (offline, rate-limited, odd tag): the panel says
  * nothing and tries again tomorrow. Clicking the version forces a check and
@@ -18,7 +17,7 @@ declare const __PROMATCH_VERSION__: string
 
 export const VERSION = __PROMATCH_VERSION__
 
-const REPO = 'thinkvp/ProMatch-releases'
+const REPO = 'thinkvp/ProMatch'
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`
 const PAGE_URL = `https://github.com/${REPO}/releases/latest`
 const LAST_CHECK_KEY = 'promatch-update-last-check'

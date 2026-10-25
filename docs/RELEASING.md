@@ -1,16 +1,8 @@
 # Releasing
 
-Two repositories:
-
-| Repo | Visibility | Holds |
-| --- | --- | --- |
-| [thinkvp/ProMatch](https://github.com/thinkvp/ProMatch) | Private | The source (this repo) |
-| [thinkvp/ProMatch-releases](https://github.com/thinkvp/ProMatch-releases) | Public | Installers, release notes, and the user docs only |
-
-The panel's update check (`src/panel/update.ts`) asks GitHub's API for the latest release
-without signing in. GitHub answers **404** to that for a private repo, and a token baked into
-the panel would be readable by anyone who installs it. So releases go to the public repo, which
-holds no source.
+Releases are GitHub releases on [thinkvp/ProMatch](https://github.com/thinkvp/ProMatch). The
+panel's update check (`src/panel/update.ts`) asks GitHub's API for the latest one without
+signing in, so **the repo has to stay public**: GitHub answers 404 for a private repo.
 
 ## One-time setup
 
@@ -29,7 +21,7 @@ holds no source.
   (DigiCert, Sectigo, SSL.com, GlobalSign, Entrust; 2026-10-25), so signatures aren't
   timestamped. That's fine while the certificate is valid (to 2051). Set `ZXP_TSA` to a server
   URL to turn timestamping on with a ZXPSignCmd that works.
-- The panel's files, the third-party notices and the EULA are all inside the signature. The
+- The panel's files, the third-party notices and the licence are all inside the signature. The
   installer empties the panel folder before copying, because a file the signature doesn't list
   makes CEP refuse the panel.
 - **The effect:** see `native/PLAN.md` for the SDKs and toolchain.
@@ -74,10 +66,10 @@ holds no source.
    git push origin main --tags
    ```
 
-7. Publish the release on the **public** repo, with the changelog section as notes:
+7. Publish the release, with the changelog section as notes:
 
    ```bash
-   gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --repo thinkvp/ProMatch-releases --title "ProMatch 0.2.0" --notes-file release-notes.md
+   gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --title "ProMatch 0.2.0" --notes-file release-notes.md
    ```
 
    The tag must be `v` + the version. Panels see it within a day, or at once when the version

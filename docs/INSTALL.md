@@ -8,7 +8,7 @@ otherwise.
 
 1. Close Premiere Pro and Media Encoder.
 2. Download `ProMatch-<version>-win-setup.exe` from the
-   [latest release](https://github.com/thinkvp/ProMatch-releases/releases/latest).
+   [latest release](https://github.com/thinkvp/ProMatch/releases/latest).
 3. Run it and accept the Windows administrator prompt. The installer needs it because Premiere
    only loads effects from `Program Files`.
 4. Start Premiere Pro and open **Window ▸ Extensions ▸ ProMatch**.
