@@ -7,7 +7,7 @@
  *     and must stay external so `require()` survives to runtime.
  *   - iife, not esm: Chromium's module loader is unreliable from file://.
  */
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { build, context } from 'esbuild'
 
 // OpenCV.js is not bundled (11 MB): it ships next to the panel and is loaded
@@ -36,6 +36,8 @@ const options = {
   logLevel: 'info',
   minify: false,
   charset: 'utf8',
+  // The running version, for the update check (src/panel/update.ts).
+  define: { __PROMATCH_VERSION__: JSON.stringify(JSON.parse(readFileSync('package.json', 'utf8')).version) },
 }
 
 if (process.argv.includes('--watch')) {

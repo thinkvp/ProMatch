@@ -6,6 +6,15 @@ apple on the table) and ProMatch works out how to turn the target camera's colou
 source camera's. It shows you the result live, then puts it on the clip in one click (its own
 **ProMatch** effect), and saves it as a `.cube` LUT too.
 
+## Install
+
+Users: run the Windows installer from the
+[latest release](https://github.com/thinkvp/ProMatch-releases/releases/latest). See
+[docs/INSTALL.md](docs/INSTALL.md). Releasing a new version: [docs/RELEASING.md](docs/RELEASING.md).
+
+The panel checks once a day for a newer release and shows a banner; clicking the version number
+next to **Log** checks now.
+
 ## Install (dev)
 
 ```bash
@@ -261,3 +270,8 @@ and are listed in [spikes/SPIKES.md](spikes/SPIKES.md). Run them and record the 
   each one directly, without switching angles by hand.
 - **Shot-to-shot.** Save a match per camera pair and reapply it across interviews shot with the
   same setup.
+
+## Licence
+
+Proprietary, all rights reserved ([LICENSE](LICENSE)). Bundled components:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

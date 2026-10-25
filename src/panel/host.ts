@@ -153,6 +153,13 @@ export function bringToFront(): void {
   window.focus()
 }
 
+/** Open a web page in the user's browser (a new window outside CEP). */
+export function openExternal(url: string): void {
+  const open = (cs as unknown as { openURLInDefaultBrowser?(url: string): void } | null)?.openURLInDefaultBrowser
+  if (open) open.call(cs, url)
+  else window.open(url, '_blank')
+}
+
 /** Close this panel (the helper reopens it, see app.ts watchEditRequests). */
 export function closeSelf(): void {
   ;(cs as unknown as { closeExtension(): void } | null)?.closeExtension()

@@ -1,6 +1,7 @@
 import { App } from './app.ts'
 import { attachLog, log } from './log.ts'
 import { syncWithHost } from './theme.ts'
+import { initUpdates } from './update.ts'
 
 window.addEventListener('DOMContentLoaded', () => {
   syncWithHost()
@@ -15,4 +16,5 @@ window.addEventListener('DOMContentLoaded', () => {
   // Handle for poking at state from DevTools (:8094).
   ;(window as unknown as { promatch: App }).promatch = app
   app.init().catch((e) => log(`Startup failed: ${e?.message ?? e}`, 'error'))
+  initUpdates(document.getElementById('update-card')!, document.getElementById('version')!)
 })

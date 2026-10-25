@@ -228,6 +228,12 @@ input.switch:checked::after { transform: translateX(12px); background: #fff; }
 .status.ok::before { background: var(--good); }
 .status.warn::before { background: var(--ok); }
 .status.err::before { background: var(--bad); }
+
+.update-card { display: flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--accent-soft); border-bottom: 1px solid var(--line); font-size: 11px; }
+.update-card[hidden] { display: none; }
+.update-text { flex: 1; min-width: 0; }
+.update-card button { height: 20px; padding: 0 8px; font-size: 11px; }
+.update-close { background: none; border-color: transparent; color: var(--muted); }
 /* Narrow panels: keep the dot, drop the words (they are in the tooltip). */
 @media (max-width: 470px) {
     .status { font-size: 0; gap: 0; }
@@ -424,6 +430,8 @@ body.dev-mode .dev-inline { display: inline-block; }
 .log-toggle:hover:not(:disabled) { color: var(--text); background: none; }
 .log-toggle.has-error::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); }
 .log { margin: 5px 0 0; max-height: 220px; overflow: auto; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; font: 11px/1.4 var(--mono); white-space: pre-wrap; color: var(--text-2); }
+.version { float: right; font-size: 11px; color: var(--muted); text-decoration: none; }
+.version:hover { color: var(--text); }
 .log-warn { color: var(--ok); }
 .log-error { color: var(--bad); }
 

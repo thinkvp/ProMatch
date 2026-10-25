@@ -10,3 +10,6 @@ spikes/uxp/out/
 spikes/uxp/vendor/
 spikes/uxp/core.js
 spikes/uxp/lut-invert.txt
+release/
+certs/
+tools/

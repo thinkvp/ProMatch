@@ -25,6 +25,13 @@
             <span id="status" class="status" role="status"></span>
         </header>
 
+        <!-- Shown only when GitHub has a newer release (src/panel/update.ts). -->
+        <div id="update-card" class="update-card" hidden>
+            <span class="update-text"></span>
+            <button class="update-open" title="Open the release page to download the installer">Download</button>
+            <button class="update-close" title="Hide until the next release" aria-label="Dismiss">✕</button>
+        </div>
+
         <main class="workspace" id="workspace">
             <div class="viewer">
                 <div class="viewer-bar">
@@ -192,6 +199,7 @@
 
                 <div class="log-drawer">
                     <button id="log-toggle" class="log-toggle" aria-expanded="false">Log</button>
+                    <a id="version" class="version" href="#" title="Check for updates"></a>
                     <pre id="log" class="log" hidden></pre>
                 </div>
             </div>

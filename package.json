@@ -10,7 +10,9 @@
     "test": "tsx scripts/test.ts",
     "fixtures": "tsx scripts/make-fixtures.ts",
     "typecheck": "tsc --noEmit",
-    "link": "node scripts/link.mjs"
+    "link": "node scripts/link.mjs",
+    "version:set": "node scripts/set-version.mjs",
+    "package:win": "node scripts/package-win.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
