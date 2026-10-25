@@ -48,13 +48,11 @@ RestartApplications=no
 [Files]
 Source: "{#StageDir}\panel\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StageDir}\effect\ProMatch.aex"; DestDir: "{commonpf64}\Adobe\Common\Plug-ins\7.0\MediaCore\ProMatch"; Flags: ignoreversion
-Source: "{#StageDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#StageDir}\EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
-; Leftovers from older versions whose file lists differ.
-Type: filesandordirs; Name: "{app}\dist"
-Type: filesandordirs; Name: "{app}\vendor"
+; Start from an empty folder: a file left over from an older version isn't in
+; the new signature, and CEP then refuses to load the panel.
+Type: filesandordirs; Name: "{app}\*"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{commonpf64}\Adobe\Common\Plug-ins\7.0\MediaCore\ProMatch"

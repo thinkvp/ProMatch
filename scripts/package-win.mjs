@@ -12,8 +12,9 @@
  * 4. Compiles installer/windows/ProMatch.iss with Inno Setup's ISCC.
  */
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 
 const ROOT = resolve('.')
 const STAGE = join(ROOT, 'release', 'stage')
@@ -62,27 +63,44 @@ for (const f of PANEL_FILES) {
   cpSync(f, join(PANEL, f), { recursive: true })
 }
 cpSync(AEX, join(EFFECT, 'ProMatch.aex'))
-cpSync('THIRD-PARTY-NOTICES.md', join(STAGE, 'THIRD-PARTY-NOTICES.md'))
+// Inside the panel folder, so they are covered by its signature: CEP rejects a
+// signed extension with files the signature doesn't list. The installer also
+// shows the EULA from the stage root.
+cpSync('THIRD-PARTY-NOTICES.md', join(PANEL, 'THIRD-PARTY-NOTICES.md'))
+cpSync('installer/EULA.txt', join(PANEL, 'EULA.txt'))
 cpSync('installer/EULA.txt', join(STAGE, 'EULA.txt'))
 
 let signed = false
 const signCmd = findTool('ZXPSIGNCMD', 'ZXPSignCmd', [join(ROOT, 'tools', 'ZXPSignCmd.exe')])
 if (signCmd) {
+  // The password is $ZXP_CERT_PASSWORD, else the file beside the certificate
+  // (both in the gitignored certs/). A new certificate gets a random one.
   const cert = process.env.ZXP_CERT || join(ROOT, 'certs', 'promatch.p12')
-  const password = process.env.ZXP_CERT_PASSWORD
-  if (!password) fail('Set ZXP_CERT_PASSWORD to sign the panel (or move ZXPSignCmd away for an unsigned dev build).')
+  const passwordFile = `${cert}.password`
+  let password = process.env.ZXP_CERT_PASSWORD || (existsSync(passwordFile) ? readFileSync(passwordFile, 'utf8').trim() : '')
   if (!existsSync(cert)) {
-    mkdirSync(join(ROOT, 'certs'), { recursive: true })
-    console.log('package-win: no certificate found, creating a self-signed one (keep certs/ out of git).')
-    run(signCmd, ['-selfSignedCert', 'AU', 'NSW', 'ThinkVP', 'ProMatch', password, cert])
+    mkdirSync(dirname(cert), { recursive: true })
+    if (!password) {
+      password = randomBytes(24).toString('base64url')
+      writeFileSync(passwordFile, password + '\n')
+    }
+    console.log(`package-win: no certificate found, creating a self-signed one at ${cert}. Back up certs/ (it is not in git).`)
+    run(signCmd, ['-selfSignedCert', 'AU', 'Australia', 'ThinkVP', 'ProMatch', password, cert, '-validityDays', '9125'])
   }
+  if (!password) fail(`No password for ${cert}: set ZXP_CERT_PASSWORD or write it to ${passwordFile}.`)
   // Signing writes a .zxp (a zip); its META-INF/signatures.xml is what CEP checks.
   const zxp = join(ROOT, 'release', `ProMatch-${version}.zxp`)
   rmSync(zxp, { force: true })
-  run(signCmd, ['-sign', PANEL, zxp, cert, password, '-tsa', 'http://timestamp.digicert.com'])
+  // No timestamp by default: ZXPSignCmd 4.1.103 crashes on every timestamp server's
+  // reply (tested 2026-10-25). The certificate is valid to 2051, so the signature
+  // holds without one. $ZXP_TSA turns it on for a ZXPSignCmd that works.
+  const tsa = process.env.ZXP_TSA ? ['-tsa', process.env.ZXP_TSA] : []
+  run(signCmd, ['-sign', PANEL, zxp, cert, password, ...tsa])
+  run(signCmd, ['-verify', zxp])
   rmSync(PANEL, { recursive: true, force: true })
   mkdirSync(PANEL, { recursive: true })
-  run('tar', ['-xf', zxp, '-C', PANEL])
+  // Windows' own tar: Git Bash's GNU tar reads "F:" as a remote host.
+  run(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zxp, '-C', PANEL])
   signed = true
 } else {
   console.warn('package-win: ZXPSignCmd not found. Building an UNSIGNED installer, which turns on PlayerDebugMode. Do not ship it.')

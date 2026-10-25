@@ -15,14 +15,23 @@ holds no source.
 ## One-time setup
 
 - **Inno Setup 6:** `winget install JRSoftware.InnoSetup`.
-- **ZXPSignCmd** (signs the panel so Premiere loads it without PlayerDebugMode): download
-  `ZXPSignCmd-64bit.exe` from
-  [Adobe-CEP/CEP-Resources ▸ ZXPSignCMD](https://github.com/Adobe-CEP/CEP-Resources/tree/master/ZXPSignCMD)
-  and save it as `tools/ZXPSignCmd.exe` (gitignored), or put it on `PATH`.
-- **Certificate:** the first signed build creates a self-signed one at `certs/promatch.p12`
-  (gitignored) with the password in `ZXP_CERT_PASSWORD`. Keep it and the password safe (a
-  password manager, plus a backup of the file): every later release should be signed with the
-  same certificate.
+- **ZXPSignCmd** (signs the panel so Premiere loads it without PlayerDebugMode): version
+  4.1.103 `win64/ZXPSignCmd.exe` from
+  [Adobe-CEP/CEP-Resources ▸ ZXPSignCMD](https://github.com/Adobe-CEP/CEP-Resources/tree/master/ZXPSignCMD),
+  saved as `tools/ZXPSignCmd.exe` (gitignored), or on `PATH`. Adobe lists its MD5 as
+  `96f1c5fe970733dae5e2b17d8643ae87`, and the file carries Adobe Inc.'s code signature.
+- **Certificate:** `certs/promatch.p12`, self-signed, valid to 2051, with its password in
+  `certs/promatch.p12.password` (both gitignored; `ZXP_CERT_PASSWORD` overrides the file). The
+  first signed build creates them if they're missing. **Back up the `certs/` folder** (a password
+  manager takes both): a lost certificate isn't fatal, since each install checks its own
+  signature, but releases should keep signing with the same one.
+- **No timestamp:** ZXPSignCmd 4.1.103 crashes on the reply of every timestamp server tried
+  (DigiCert, Sectigo, SSL.com, GlobalSign, Entrust; 2026-10-25), so signatures aren't
+  timestamped. That's fine while the certificate is valid (to 2051). Set `ZXP_TSA` to a server
+  URL to turn timestamping on with a ZXPSignCmd that works.
+- The panel's files, the third-party notices and the EULA are all inside the signature. The
+  installer empties the panel folder before copying, because a file the signature doesn't list
+  makes CEP refuse the panel.
 - **The effect:** see `native/PLAN.md` for the SDKs and toolchain.
 
 ## Each release
@@ -40,7 +49,7 @@ holds no source.
    npm test
    ```
 
-4. Build the installer. With `ZXP_CERT_PASSWORD` set in the environment:
+4. Build the installer:
 
    ```bash
    npm run package:win
