@@ -36,6 +36,14 @@ export interface CaptureClip {
   vignette?: number | null
   /** The media's colour space; scene-referred = log or raw. */
   media?: { name: string; sceneReferred: boolean } | null
+  /** Captured alone: its ProMatch effects at 0% and the tracks above it hidden for the capture. */
+  raw?: boolean
+  /** Tracks (V numbers) hidden for the capture. */
+  hidden?: number[]
+  /** Its own track was hidden, so shown for the capture. */
+  shown?: boolean
+  /** ProMatch effects set to 0% for the capture. */
+  bypassed?: number
 }
 
 export interface SelectedClip {
@@ -106,7 +114,8 @@ export async function connect(): Promise<{ app: string; version: string; sequenc
 }
 
 export const projectInfo = () => call<{ name: string | null; path: string | null }>('PM_projectInfo')
-export const captureFrame =(path: string) => call<CaptureInfo>('PM_captureFrame', { path })
+/** The frame at the playhead; `raw`: the camera's clip alone, without ProMatch (PM_captureFrame). */
+export const captureFrame = (path: string, raw = true) => call<CaptureInfo>('PM_captureFrame', { path, raw })
 export const selection = () => call<SelectedClip[]>('PM_selection')
 export const addLumetri = () => call<{ added: number; failed: string[] }>('PM_addLumetri')
 export const dumpEffects = () => call<EffectDump>('PM_dumpEffects')

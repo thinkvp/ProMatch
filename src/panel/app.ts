@@ -224,6 +224,20 @@ export class App {
   private opts: MatchOptions = { ...DEFAULT_OPTIONS }
   /** Sample size slider, %: scales every point's radius. */
   private radiusScale = 0
+  /**
+   * Full-resolution After: the preview is worked out on a copy at most
+   * PREVIEW_MAX_W wide, which zooming in shows as blocks (a 4K capture at
+   * 100% is 3× magnified). Once a view shows that copy's pixels bigger than
+   * ~1.25 screen px, the same LUT is run over the full frame in slices in
+   * the background (a 4K frame takes ~0.25 s) and swapped in.
+   */
+  private viewScale: Record<Role, number> = { source: 0, target: 0 }
+  /** Each frame's caption before a capture ("match to this"), for New match. */
+  private metaDefault: Record<Role, string> = { source: '', target: '' }
+  private previewLut: Record<Role, Lut3D | null> = { source: null, target: null }
+  private detail: Record<Role, { lut: Lut3D; canvas: HTMLCanvasElement } | null> = { source: null, target: null }
+  private detailTimer: Record<Role, ReturnType<typeof setTimeout> | null> = { source: null, target: null }
+  private detailCanvas: Record<Role, HTMLCanvasElement | null> = { source: null, target: null }
   private lutSize = 33
   private lutName = 'ProMatch'
   private lutNameAuto = true
@@ -290,6 +304,7 @@ export class App {
 
   private makeView(role: Role): FrameView {
     const el = this.frameEl(role)
+    this.metaDefault[role] = $('[data-meta]', el).textContent ?? ''
     const view = new FrameView($('.canvas-wrap', el), $('canvas', el) as HTMLCanvasElement, {
       pick: (x, y, r) => this.onPick(role, x, y, r),
       move: (id, x, y) => {
@@ -325,6 +340,10 @@ export class App {
         if (this.scopeArea === 'point') this.renderScopes()
       },
       remove: (id) => this.removePair(id),
+      scale: (k) => {
+        this.viewScale[role] = k
+        this.scheduleDetail(role)
+      },
     })
     for (const b of el.querySelectorAll('[data-capture]')) b.addEventListener('click', () => this.capture(role))
     for (const b of el.querySelectorAll('[data-open]')) {
@@ -440,6 +459,26 @@ export class App {
     $('#clear-points').addEventListener('click', () => this.clearPoints(''))
     $('#apply').addEventListener('click', () => this.apply())
     $('#undo').addEventListener('click', () => this.undo())
+    // Two clicks: the first arms it for a few seconds.
+    const newBtn = $('#new-match') as HTMLButtonElement
+    let armed: ReturnType<typeof setTimeout> | null = null
+    const disarm = () => {
+      if (armed) clearTimeout(armed)
+      armed = null
+      newBtn.classList.remove('confirm')
+      newBtn.textContent = 'New match'
+    }
+    newBtn.addEventListener('click', () => {
+      if (armed) {
+        disarm()
+        this.newMatch()
+        return
+      }
+      if (!this.frames.source && !this.frames.target && !this.pairs.length) return this.newMatch()
+      newBtn.classList.add('confirm')
+      newBtn.textContent = 'Clear everything?'
+      armed = setTimeout(disarm, 3000)
+    })
     $('#redo').addEventListener('click', () => this.redo())
     $('#spike-dump').addEventListener('click', () => this.spikeDump())
     $('#spike-setlut').addEventListener('click', () => this.spikeSetLut())
@@ -710,10 +749,61 @@ Captured in ${setupName(colour)} colour management` : ''}`
       // A new target may be a new clip or setup: measure afresh on the next Apply.
       if (role === 'target') this.recalibrate = true
       if (role === 'target' && info.clip) this.autoName(info.clip.name)
-      log(`${role}: ${label}`)
+      log(`${role}: ${label}${this.leftOut(info.clip)}`)
     } catch (e) {
       log(`Capture failed: ${(e as Error).message}`, 'error')
     }
+  }
+
+  /**
+   * Start over: no frames or points, every setting at its default, and the
+   * next Apply makes a new effect. Clips already matched keep their effect,
+   * whose Edit LUT brings that match back. The LUT size is kept.
+   */
+  private newMatch(): void {
+    this.opts = { ...DEFAULT_OPTIONS }
+    this.radiusScale = 0
+    this.lutName = 'ProMatch'
+    this.lutNameAuto = true
+    ;($('#lut-name') as HTMLInputElement).value = this.lutName
+    this.matchId = null
+    this.recalibrate = true
+    this.pairs = []
+    this.nextId = 1
+    this.pendingId = null
+    this.selectedId = null
+    this.undoStack = []
+    this.redoStack = []
+    this.frames = { source: null, target: null }
+    this.areas = null
+    this.previewData = null
+    for (const role of ROLES) {
+      this.previewLut[role] = null
+      this.detail[role] = null
+      this.views[role].setImage(null)
+      const el = this.frameEl(role)
+      el.classList.remove('loaded')
+      $('[data-meta]', el).textContent = this.metaDefault[role]
+      $('[data-meta]', el).title = ''
+      $('[data-empty]', el).hidden = false
+    }
+    $('#export-result').hidden = true
+    this.scopes.setQualifier(null)
+    this.setViewMode('original')
+    this.syncControls()
+    this.applyLayout()
+    log('New match: frames, points and settings cleared.')
+    this.update()
+  }
+
+  /** What a capture left out to show the camera alone, for its log line. */
+  private leftOut(clip: host.CaptureClip | null): string {
+    if (!clip?.raw) return ''
+    const parts: string[] = []
+    if (clip.hidden?.length) parts.push(`without ${clip.hidden.map((t) => `V${t}`).join(', ')} above it`)
+    if (clip.shown) parts.push(`V${clip.track} shown for it`)
+    if (clip.bypassed) parts.push(`its ProMatch off`)
+    return parts.length ? ` (${parts.join('; ')})` : ''
   }
 
   async openFile(role: Role, f: File): Promise<void> {
@@ -1187,8 +1277,42 @@ Captured in ${setupName(colour)} colour management` : ''}`
     this.scheduleSave()
   }
 
+  /** Build the full-resolution After for `role` once the view is zoomed in far enough to need it (see viewScale). */
+  private scheduleDetail(role: Role): void {
+    const t = this.detailTimer[role]
+    if (t) clearTimeout(t)
+    this.detailTimer[role] = null
+    const f = this.frames[role]
+    const lut = this.previewLut[role]
+    if (!f || !lut || this.detail[role]?.lut === lut) return
+    // How big one pixel of the small copy shows on screen.
+    if (this.viewScale[role] * (f.width / f.small.width) <= 1.25) return
+    this.detailTimer[role] = setTimeout(() => void this.buildDetail(role, f, lut), 250)
+  }
+
+  private async buildDetail(role: Role, f: Frame, lut: Lut3D): Promise<void> {
+    this.detailTimer[role] = null
+    const stale = () => this.previewLut[role] !== lut || this.frames[role] !== f
+    const px = new Uint8ClampedArray(f.pixels.data)
+    const stride = f.width * 4
+    // In slices, so the panel stays responsive; a newer preview cancels it.
+    for (let y = 0; y < f.height; y += 240) {
+      if (stale()) return
+      applyLutToPixels(lut, px.subarray(y * stride, Math.min(f.height, y + 240) * stride))
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    if (stale()) return
+    let canvas = this.detailCanvas[role]
+    if (!canvas || canvas.width !== f.width || canvas.height !== f.height) canvas = this.detailCanvas[role] = canvasOf(f.width, f.height)
+    canvas.getContext('2d')!.putImageData(new ImageData(px, f.width, f.height), 0, 0)
+    this.detail[role] = { lut, canvas }
+    this.views[role].setOverlay(canvas)
+  }
+
   private renderPreview(tgt: Frame): void {
     const lut = bakeLut(PREVIEW_LUT_SIZE, (c) => applyModel(this.model, c))
+    this.previewLut.target = lut
+    this.detail.target = null
     const img = new ImageData(new Uint8ClampedArray(tgt.small.data), tgt.small.width, tgt.small.height)
     applyLutToPixels(lut, img.data)
     this.previewData = img
@@ -1197,6 +1321,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
     }
     this.preview.getContext('2d', { willReadFrequently: true })!.putImageData(img, 0, 0)
     this.views.target.setOverlay(this.preview)
+    this.scheduleDetail('target')
   }
 
   // -------------------------------------------------------------- render
@@ -1439,7 +1564,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
    */
   private async calibrate(): Promise<Calibration> {
     const base = node.join(node.capturesDir(), `calibration-${Date.now()}`)
-    await host.captureFrame(base)
+    await host.captureFrame(base, false)
     const file = await node.waitForFile([`${base}.png`, base])
     try {
       return readProbe(await decodeImage(node.readDataUrl(file)))

@@ -4,11 +4,15 @@ Installing: [INSTALL.md](INSTALL.md). How the match is computed: [HOW-IT-WORKS.m
 
 ## The steps
 
-1. **Source.** Put the playhead on the camera you want to match *to*, then press **Capture**. It
-   exports the Program Monitor frame.
-2. **Target.** Switch to the camera you want to fix (same moment if possible) and press
-   **Capture**. Capture it *before* putting a ProMatch LUT on it, or you will be matching
-   on top of an old match.
+1. **Source.** Put the playhead on the camera you want to match *to*, then press **Capture**.
+2. **Target.** Put it on the camera you want to fix (same moment if possible) and press
+   **Capture**.
+
+   A capture is of one camera, as it comes in: the clip under the playhead that's selected (even
+   on a hidden track), else the top visible one. For that instant, the tracks above it are
+   hidden and its ProMatch effects set to 0%, then put back. So with both cameras stacked,
+   select one, capture, select the other, capture; and recapturing a clip that already has its
+   match never matches on top of it. Its Lumetri and other effects stay in.
 3. **Points.** Press **Auto** for a starting set of pairs (dashed, marked *A*), including a few
    on each face. Check them and delete any that look wrong, then add a few of your own,
    especially on plain areas Auto can't reach: click something on
@@ -49,6 +53,10 @@ how close the match gets at that spot *without* it. Click again to switch it bac
 **New frames:** capturing (or opening) a new source or target clears the points, since they
 belonged to the old frame. **Ctrl+Z** brings them back.
 
+**New match** (toolbar, click twice): starts over for another pair of cameras. It clears both
+frames and the points and puts every setting back to its default; the next Apply makes a new
+effect. Clips you already matched keep theirs, and its **Edit LUT** brings that match back.
+
 **Undo:** every point change (place, draw, move, resize, delete, switch off, Auto, Clear all)
 can be undone with **Ctrl+Z** or the ↶ button in the toolbar. **Ctrl+Shift+Z**, **Ctrl+Y** or
 ↷ redoes.
@@ -88,7 +96,8 @@ to add the target as shot in grey and see what the match changed.
   frame mids matched exactly (17 / 17) while the matched areas read 38 / 29.
 
 **Viewing:** scroll to zoom around the cursor; **Space**+drag or middle-drag pans; the %
-badge returns to fit. The eye button, or **H**, hides the points for a clean look.
+badge returns to fit. The eye button, or **H**, hides the points for a clean look. In **Split**, drag the divider or its round grip to wipe between before
+and after; double-click it to centre it.
 
 **Multicam:** apply the LUT to the angle's clip *inside the multicam source sequence*. Then every
 cut to that camera inherits it, and your creative grade stays on the edit as usual.

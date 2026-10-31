@@ -9,6 +9,9 @@
  *
  * Zoom: scroll wheel zooms around the cursor; Space+drag or middle-drag pans
  * (left-drag is drawing); the badge in the corner returns to fit.
+ *
+ * Split: drag the divider (or its grip) to wipe between before and after;
+ * double-click it to centre it again.
  */
 
 export interface Marker {
@@ -35,6 +38,8 @@ export interface FrameViewEvents {
   resize(id: number, r: number): void
   select(id: number | null): void
   remove(id: number): void
+  /** The view's scale changed: screen (device) px per image px. */
+  scale?(devicePxPerImagePx: number): void
 }
 
 export type ViewMode = 'original' | 'matched' | 'split'
@@ -43,6 +48,8 @@ const LOUPE_PX = 132
 const LOUPE_ZOOM = 5
 const DRAG_THRESHOLD = 3
 const MAX_ZOOM = 32
+/** How close (CSS px) to the split divider or its grip a press grabs it. */
+const SPLIT_GRAB = 9
 /** Above this many screen px per image px the loupe adds nothing. */
 const LOUPE_MAX_SCALE = 2
 
@@ -71,6 +78,9 @@ export class FrameView {
   private overCanvas = false
   private badge: HTMLButtonElement
   mode: ViewMode = 'original'
+  /** Split view: where the divider sits, as a fraction of the view's width. */
+  private splitAt = 0.5
+  private splitDrag = false
   /** Radius a click would place (image px): drawn in the loupe. */
   radius = 10
   private markersVisible = true
@@ -123,6 +133,11 @@ export class FrameView {
       },
       true,
     )
+    canvas.addEventListener('dblclick', (e) => {
+      if (!this.nearSplit(e)) return
+      this.splitAt = 0.5
+      this.render()
+    })
     canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       const p = this.toImage(e)
@@ -213,6 +228,7 @@ export class FrameView {
     }
     this.clampView()
     this.render()
+    this.ev.scale?.(this.s * dpr)
   }
 
   /** CSS px per image px right now. */
@@ -231,6 +247,7 @@ export class FrameView {
     this.badge.hidden = this.zoom <= 1.001
     // Percent of actual pixels, which is what an editor thinks in.
     this.badge.textContent = `${Math.round(this.s * (window.devicePixelRatio || 1) * 100)}%  ⤢`
+    this.ev.scale?.(this.s * (window.devicePixelRatio || 1))
   }
 
   private toImage(e: MouseEvent): { x: number; y: number } {
@@ -266,12 +283,32 @@ export class FrameView {
     return best
   }
 
-  private updateCursor(hit?: { mode: 'move' | 'resize' } | null): void {
+  private updateCursor(hit?: { mode: 'move' | 'resize' } | null, onSplit = false): void {
     if (this.down?.panning) this.canvas.style.cursor = 'grabbing'
     else if (this.space) this.canvas.style.cursor = 'grab'
     else if (hit?.mode === 'resize') this.canvas.style.cursor = 'nwse-resize'
     else if (hit?.mode === 'move') this.canvas.style.cursor = 'move'
+    else if (this.splitDrag || onSplit) this.canvas.style.cursor = 'ew-resize'
     else this.canvas.style.cursor = ''
+  }
+
+  /**
+   * Where the mouse is on the split divider, when it shows: its 'grip'
+   * (which wins over a point under it), the rest of the 'line', or null.
+   */
+  private onSplit(e: MouseEvent): 'grip' | 'line' | null {
+    if (this.mode !== 'split' || !this.overlay || !this.image) return null
+    const r = this.canvas.getBoundingClientRect()
+    const x = e.clientX - r.left
+    const line = this.splitAt * r.width
+    // The grip stays inside the view when the line is at an edge (drawSplit).
+    const grip = Math.min(Math.max(line, 10), r.width - 10)
+    if (Math.hypot(x - grip, e.clientY - r.top - r.height / 2) <= SPLIT_GRAB + 2) return 'grip'
+    return Math.abs(x - line) <= SPLIT_GRAB ? 'line' : null
+  }
+
+  private nearSplit(e: MouseEvent): boolean {
+    return this.onSplit(e) !== null
   }
 
   private inside(p: { x: number; y: number }): boolean {
@@ -300,7 +337,14 @@ export class FrameView {
   private onDown(e: MouseEvent): void {
     if (!this.image || (e.button !== 0 && e.button !== 1)) return
     const p = this.toImage(e)
-    const hit = e.button === 0 && !this.space ? this.hitTest(p.x, p.y) : null
+    const split = e.button === 0 && !this.space ? this.onSplit(e) : null
+    const hit = e.button === 0 && !this.space && split !== 'grip' ? this.hitTest(p.x, p.y) : null
+    if (!hit && split) {
+      this.splitDrag = true
+      this.updateCursor()
+      e.preventDefault()
+      return
+    }
     if (hit) {
       this.drag = { id: hit.id, mode: hit.mode, cx: hit.m.x, cy: hit.m.y, startX: e.clientX, startY: e.clientY, moved: false }
       this.ev.select(hit.id)
@@ -314,6 +358,13 @@ export class FrameView {
   private onMove(e: MouseEvent): void {
     if (!this.image) return
     const p = this.toImage(e)
+    if (this.splitDrag) {
+      const r = this.canvas.getBoundingClientRect()
+      this.splitAt = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+      this.hover = e.target === this.canvas && this.inside(p) ? p : null
+      this.render()
+      return
+    }
     if (this.drag) {
       if (!this.drag.moved && Math.hypot(e.clientX - this.drag.startX, e.clientY - this.drag.startY) < DRAG_THRESHOLD) return
       this.drag.moved = true
@@ -349,12 +400,18 @@ export class FrameView {
     }
     if (e.target === this.canvas && this.inside(p)) {
       this.hover = p
-      this.updateCursor(this.hitTest(p.x, p.y))
+      const split = this.onSplit(e)
+      this.updateCursor(split === 'grip' ? null : this.hitTest(p.x, p.y), split !== null)
       this.render()
     }
   }
 
   private onUp(e: MouseEvent): void {
+    if (this.splitDrag) {
+      this.splitDrag = false
+      this.updateCursor(null, this.nearSplit(e))
+      return
+    }
     if (this.drag) {
       this.drag = null
       return
@@ -425,10 +482,9 @@ export class FrameView {
     const img = this.isoBase ?? this.image
     const ov = this.overlay ? (this.isoOverlay ?? this.overlay) : null
     if (this.mode === 'split' && ov) {
+      const x = Math.round(W * this.splitAt)
       this.drawView(img)
-      this.drawView(ov, Math.round(W / 2))
-      c.fillStyle = 'rgba(255,255,255,0.85)'
-      c.fillRect(Math.round(W / 2) - dpr / 2, 0, dpr, H)
+      if (x < W) this.drawView(ov, Math.max(x, 0.001))
     } else {
       this.drawView(this.mode !== 'original' && ov ? ov : img)
     }
@@ -442,6 +498,8 @@ export class FrameView {
         this.drawMarker(m, x, y, Math.max(m.r * k, 4 * dpr), dpr)
       }
     }
+    // Over the markers, so the grip is never hidden under a point.
+    if (this.mode === 'split' && ov) this.drawSplit(Math.round(W * this.splitAt), H, dpr)
     if (this.down && this.down.drawR > 0) {
       // The point being drawn.
       const k = this.s * dpr
@@ -463,10 +521,38 @@ export class FrameView {
       // In split view, read whichever half the cursor is over.
       const split = this.mode === 'split' && this.overlay
       const cursorX = (this.hover.x - this.vx) * this.s * dpr
-      const src = split && cursorX < W / 2 ? this.image : shown
+      const src = split && cursorX < W * this.splitAt ? this.image : shown
       if (this.s < LOUPE_MAX_SCALE) this.drawLoupe(src, dpr)
       else this.drawReadout(src, dpr)
     }
+  }
+
+  /** The split divider at canvas x, with a grip halfway down: ◂ ▸ in a circle. */
+  private drawSplit(x: number, H: number, dpr: number): void {
+    const c = this.ctx
+    const y = H / 2
+    const r = 9 * dpr
+    const gx = Math.min(Math.max(x, r + dpr), this.canvas.width - r - dpr)
+    c.save()
+    c.fillStyle = 'rgba(255,255,255,0.85)'
+    c.fillRect(x - dpr / 2, 0, dpr, H)
+    c.beginPath()
+    c.arc(gx, y, r, 0, Math.PI * 2)
+    c.fillStyle = this.splitDrag ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.55)'
+    c.fill()
+    c.lineWidth = 1.5 * dpr
+    c.strokeStyle = 'rgba(255,255,255,0.9)'
+    c.stroke()
+    c.fillStyle = '#fff'
+    for (const d of [-1, 1]) {
+      c.beginPath()
+      c.moveTo(gx + d * 6 * dpr, y)
+      c.lineTo(gx + d * 2 * dpr, y - 3.5 * dpr)
+      c.lineTo(gx + d * 2 * dpr, y + 3.5 * dpr)
+      c.closePath()
+      c.fill()
+    }
+    c.restore()
   }
 
   private drawMarker(m: Marker, x: number, y: number, r: number, dpr: number): void {

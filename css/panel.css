@@ -70,6 +70,8 @@ html, body {
 .auto-btn { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border-color: var(--line-strong); color: var(--text); }
 .auto-btn svg { width: 13px; height: 13px; fill: var(--accent); }
 .auto-btn.busy { opacity: 0.6; cursor: progress; }
+.new-btn { padding: 0 8px; }
+.new-btn.confirm, .new-btn.confirm:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
 
 .frames[data-show="source"] .frame[data-role="target"],
 .frames[data-show="target"] .frame[data-role="source"] { display: none; }

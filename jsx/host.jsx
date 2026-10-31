@@ -81,36 +81,67 @@ function _pmVignette(clip) {
     return null;
 }
 
-/** Topmost visible video clip under the playhead — what the frame shows. */
-function _pmClipAtPlayhead(seq) {
-    if (!seq) return null;
-    var pos = _pmTicks(seq.getPlayerPosition());
-    for (var t = seq.videoTracks.numTracks - 1; t >= 0; t--) {
-        var track = seq.videoTracks[t];
-        if (typeof track.isMuted === "function" && track.isMuted()) continue;
-        for (var c = 0; c < track.clips.numItems; c++) {
-            var clip = track.clips[c];
-            if (_pmTicks(clip.start) <= pos && pos < _pmTicks(clip.end)) {
-                var multicam = false;
-                try {
-                    multicam = !!(clip.projectItem && clip.projectItem.isMulticamClip && clip.projectItem.isMulticamClip());
-                } catch (e1) {}
-                // Its effects and media colour space: the panel checks both
-                // frames had the same treatment (log converted on both, or neither).
-                var media = null;
-                try {
-                    var cs = clip.projectItem.getColorSpace();
-                    media = { name: String(cs.name), sceneReferred: !!cs.isSceneReferred };
-                } catch (e2) {}
-                var vignette = null;
-                try {
-                    vignette = _pmVignette(clip);
-                } catch (e3) {}
-                return { name: clip.name, track: t + 1, multicam: multicam, effects: _pmEffectNames(clip), media: media, vignette: vignette };
-            }
-        }
+function _pmMuted(track) {
+    return typeof track.isMuted === "function" && track.isMuted();
+}
+
+/** The clip on `track` under sequence time `pos` (ticks), else null. */
+function _pmClipAt(track, pos) {
+    for (var c = 0; c < track.clips.numItems; c++) {
+        var clip = track.clips[c];
+        if (_pmTicks(clip.start) <= pos && pos < _pmTicks(clip.end)) return clip;
     }
     return null;
+}
+
+/** Topmost visible video clip under the playhead (what the frame shows) as { clip, track }, else null. */
+function _pmTopClip(seq) {
+    var pos = _pmTicks(seq.getPlayerPosition());
+    for (var t = seq.videoTracks.numTracks - 1; t >= 0; t--) {
+        if (_pmMuted(seq.videoTracks[t])) continue;
+        var clip = _pmClipAt(seq.videoTracks[t], pos);
+        if (clip) return { clip: clip, track: t };
+    }
+    return null;
+}
+
+/**
+ * The camera a capture is of: the topmost selected video clip under the
+ * playhead, even on a hidden track, else the topmost visible one.
+ */
+function _pmCameraClip(seq) {
+    var pos = _pmTicks(seq.getPlayerPosition());
+    for (var t = seq.videoTracks.numTracks - 1; t >= 0; t--) {
+        var clip = _pmClipAt(seq.videoTracks[t], pos);
+        if (clip && clip.isSelected()) return { clip: clip, track: t };
+    }
+    return _pmTopClip(seq);
+}
+
+/** What the panel is told about a captured clip, with what was on it then. */
+function _pmClipInfo(clip, t) {
+    var multicam = false;
+    try {
+        multicam = !!(clip.projectItem && clip.projectItem.isMulticamClip && clip.projectItem.isMulticamClip());
+    } catch (e1) {}
+    // Its effects and media colour space: the panel checks both
+    // frames had the same treatment (log converted on both, or neither).
+    var media = null;
+    try {
+        var cs = clip.projectItem.getColorSpace();
+        media = { name: String(cs.name), sceneReferred: !!cs.isSceneReferred };
+    } catch (e2) {}
+    var vignette = null;
+    try {
+        vignette = _pmVignette(clip);
+    } catch (e3) {}
+    return { name: clip.name, track: t + 1, multicam: multicam, effects: _pmEffectNames(clip), media: media, vignette: vignette };
+}
+
+/** Topmost visible video clip under the playhead, as _pmClipInfo, else null. */
+function _pmClipAtPlayhead(seq) {
+    var top = seq ? _pmTopClip(seq) : null;
+    return top ? _pmClipInfo(top.clip, top.track) : null;
 }
 
 /** Selected VIDEO track items with the indices QE needs to find them again. */
@@ -174,9 +205,13 @@ function PM_projectInfo() {
 }
 
 /**
- * Export the Program Monitor frame at the playhead as PNG.
- * QE's exportFramePNG returns immediately and writes asynchronously, and may
- * or may not append ".png" itself — the panel polls for both names.
+ * Export the sequence frame at the playhead to `a.path` as PNG. QE's
+ * exportFramePNG renders during the call but writes the file just after,
+ * and may or may not append ".png" itself: the panel polls for both names.
+ * With `a.raw` it is the camera alone (_pmCameraClip): the tracks above it
+ * with a clip there hidden, its own track shown, its ProMatch effects at 0%,
+ * all put back as soon as the export returns. Without (calibration), the
+ * frame as the Program Monitor shows it.
  */
 function PM_captureFrame(argJson) {
     return _pmWrap(function (a) {
@@ -185,14 +220,58 @@ function PM_captureFrame(argJson) {
         app.enableQE();
         var q = qe.project.getActiveSequence();
         var tc = q.CTI.timecode;
-        q.exportFramePNG(tc, a.path);
-        return {
-            timecode: tc,
-            sequence: seq.name,
-            width: seq.frameSizeHorizontal,
-            height: seq.frameSizeVertical,
-            clip: _pmClipAtPlayhead(seq)
-        };
+        var info = { timecode: tc, sequence: seq.name, width: seq.frameSizeHorizontal, height: seq.frameSizeVertical, clip: null };
+        var pick = a.raw ? _pmCameraClip(seq) : _pmTopClip(seq);
+        if (pick) info.clip = _pmClipInfo(pick.clip, pick.track);
+        if (!a.raw || !pick) {
+            q.exportFramePNG(tc, a.path);
+            return info;
+        }
+        var pos = _pmTicks(seq.getPlayerPosition());
+        var tracks = [];
+        var amounts = [];
+        try {
+            for (var t = pick.track + 1; t < seq.videoTracks.numTracks; t++) {
+                var above = seq.videoTracks[t];
+                if (!_pmMuted(above) && _pmClipAt(above, pos)) {
+                    above.setMute(1);
+                    tracks.push({ track: above, muted: 0, n: t + 1 });
+                }
+            }
+            var own = seq.videoTracks[pick.track];
+            if (_pmMuted(own)) {
+                own.setMute(0);
+                tracks.push({ track: own, muted: 1, n: pick.track + 1 });
+            }
+            for (var k = 0; k < pick.clip.components.numItems; k++) {
+                var comp = pick.clip.components[k];
+                if (String(comp.matchName).indexOf(PM_EFFECT_MATCH) === -1) continue;
+                var amount = _pmParam(comp, "Amount");
+                var v = amount ? Number(amount.getValue()) : 0;
+                if (!v) continue;
+                amount.setValue(0, true);
+                amounts.push({ param: amount, value: v });
+            }
+            q.exportFramePNG(tc, a.path);
+        } finally {
+            for (var i = amounts.length - 1; i >= 0; i--) {
+                try {
+                    amounts[i].param.setValue(amounts[i].value, true);
+                } catch (e1) {}
+            }
+            for (var j = tracks.length - 1; j >= 0; j--) {
+                try {
+                    tracks[j].track.setMute(tracks[j].muted);
+                } catch (e2) {}
+            }
+        }
+        // What the capture left out, for the panel's log.
+        info.clip.hidden = [];
+        for (var h = 0; h < tracks.length; h++) if (!tracks[h].muted) info.clip.hidden.push(tracks[h].n);
+        info.clip.shown = tracks.length > 0 && !!tracks[tracks.length - 1].muted;
+        info.clip.bypassed = amounts.length;
+        info.clip.raw = true;
+        return info;
     }, argJson);
 }
 

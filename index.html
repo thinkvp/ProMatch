@@ -54,6 +54,7 @@
                     <button id="redo" class="icon-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>
                         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"/><path d="M13 6.5H6.5a3.5 3.5 0 000 7H9"/></svg>
                     </button>
+                    <button id="new-match" class="quiet new-btn" title="Start a new match: clears both frames and the points, and puts every setting back to its default. The next Apply makes a new effect; clips already matched keep theirs.">New match</button>
                     <span class="bar-spacer"></span>
                     <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: hue map, luma and RGB parade, source vs target (S)">
                         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12"/><circle cx="6.4" cy="6.6" r="1.1" class="fill"/></svg>
@@ -61,7 +62,7 @@
                     </button>
                     <div class="seg" id="view-mode" role="group" aria-label="Target preview">
                         <button data-mode="original" aria-pressed="true" title="Target as shot">Before</button>
-                        <button data-mode="split" aria-pressed="false" title="Left half as shot, right half matched">Split</button>
+                        <button data-mode="split" aria-pressed="false" title="Before on the left, after on the right: drag the divider to wipe between them (double-click it to centre)">Split</button>
                         <button data-mode="matched" aria-pressed="false" title="Target with the match applied">After</button>
                     </div>
                 </div>
@@ -71,7 +72,7 @@
                             <span class="role">Source</span>
                             <span class="frame-meta" data-meta>match to this</span>
                             <div class="frame-actions">
-                                <button class="icon-btn" data-capture title="Capture the Program Monitor frame at the playhead">
+                                <button class="icon-btn" data-capture title="Capture the camera at the playhead: the selected clip there, else the top one, without the tracks above it or its ProMatch">
                                     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
                                 </button>
                                 <button class="icon-btn" data-open title="Open a still image…">
@@ -83,7 +84,7 @@
                             <canvas></canvas>
                             <div class="empty" data-empty>
                                 <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
-                                <p>Park the playhead on the camera you want to <b>match to</b>.</p>
+                                <p>Park the playhead on the camera you want to <b>match to</b>. If another camera is above it, select its clip.</p>
                                 <div class="empty-actions">
                                     <button class="primary" data-capture>Capture frame</button>
                                     <button class="quiet" data-open>Open still…</button>
@@ -97,7 +98,7 @@
                             <span class="role">Target</span>
                             <span class="frame-meta" data-meta>fix this</span>
                             <div class="frame-actions">
-                                <button class="icon-btn" data-capture title="Capture the Program Monitor frame at the playhead">
+                                <button class="icon-btn" data-capture title="Capture the camera at the playhead: the selected clip there, else the top one, without the tracks above it or its ProMatch">
                                     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
                                 </button>
                                 <button class="icon-btn" data-open title="Open a still image…">
@@ -109,7 +110,7 @@
                             <canvas></canvas>
                             <div class="empty" data-empty>
                                 <svg class="empty-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.5h2.6l1.2-1.8h4.4l1.2 1.8H14v7.3H2z"/><circle cx="8" cy="9.1" r="2.3"/></svg>
-                                <p>Switch to the camera you want to <b>fix</b>, ideally at the same moment and without a ProMatch LUT on it.</p>
+                                <p>Now the camera you want to <b>fix</b>, ideally at the same moment: park on it, or select its clip.</p>
                                 <div class="empty-actions">
                                     <button class="primary" data-capture>Capture frame</button>
                                     <button class="quiet" data-open>Open still…</button>
