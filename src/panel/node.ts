@@ -42,12 +42,14 @@ export function capturesDir(): string {
  * Where LUTs are saved: a "ProMatch LUTs" folder beside the saved .prproj, so
  * they travel and get backed up with the project. Documents\ProMatch LUTs
  * when the project has never been saved (its path is not on disk yet).
+ * Only the path: callers that write create it, so opening the panel leaves
+ * no empty folder beside the project.
  */
 export function lutDir(projectPath: string | null = null): { dir: string; withProject: boolean } {
   if (projectPath && /\.prproj$/i.test(projectPath) && exists(projectPath)) {
-    return { dir: ensureDir(join(need(path).dirname(projectPath), 'ProMatch LUTs')), withProject: true }
+    return { dir: join(need(path).dirname(projectPath), 'ProMatch LUTs'), withProject: true }
   }
-  return { dir: ensureDir(join(need(os).homedir(), 'Documents', 'ProMatch LUTs')), withProject: false }
+  return { dir: join(need(os).homedir(), 'Documents', 'ProMatch LUTs'), withProject: false }
 }
 
 export function ensureDir(dir: string): string {
@@ -145,7 +147,7 @@ export function newestCube(dir: string): string | null {
   const f = need(fs)
   let best: string | null = null
   let bestT = -1
-  for (const name of f.readdirSync(dir)) {
+  for (const name of listDir(dir)) {
     if (!name.toLowerCase().endsWith('.cube')) continue
     const p = join(dir, name)
     const t = f.statSync(p).mtimeMs

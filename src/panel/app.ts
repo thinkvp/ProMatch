@@ -1490,7 +1490,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
         return
       }
       const folder = await this.lutFolder()
-      const p = node.join(folder.dir, fileName)
+      const p = node.join(node.ensureDir(folder.dir), fileName)
       node.writeText(p, text)
       this.lastExport = p
       const id = this.matchId
