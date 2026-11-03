@@ -1,10 +1,28 @@
 # ProMatch
 
 A free Premiere Pro panel that matches the colour of one camera angle to another, made for
-multicam interviews. You click the same things in both shots (the wall, the interviewee's skin, a
-red apple on the table) and ProMatch works out how to turn the target camera's colours into the
-source camera's. It shows the result live, then puts it on the clip in one click with its own
-**ProMatch** effect, and saves it as a `.cube` LUT too.
+multicam interviews. Press **Auto** for a starting set of points it finds itself, faces included,
+then keep clicking to add your own, picking the same thing in both shots. ProMatch works out how
+to turn the target camera's colours into the source camera's. It shows the result live, then puts
+it on the clip in one click with its own **ProMatch** effect, and saves it as a `.cube` LUT too.
+
+![The ProMatch panel: the graded close-up on the left, the wide camera matched to it on the right, with 28 point pairs and the tested error for each](docs/screenshots/panel.png)
+
+## Compared with Premiere Pro's Color Match
+
+The wide camera from the shot above, matched to the graded close-up. Color Match leaves the skin
+darker and more orange and the shirt yellow; ProMatch's lands much closer to the source.
+
+![Faces from the graded source camera, the wide camera after Premiere Pro's Color Match, and the wide camera after ProMatch](docs/screenshots/compare-faces.png)
+
+<details>
+<summary>Full frames</summary>
+
+| Source camera (graded) | Premiere Pro Color Match | ProMatch |
+| --- | --- | --- |
+| ![](docs/screenshots/source-graded.png) | ![](docs/screenshots/target-premiere-color-match.png) | ![](docs/screenshots/target-promatch.png) |
+
+</details>
 
 ## Install
 
