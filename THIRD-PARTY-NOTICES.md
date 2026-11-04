@@ -9,7 +9,7 @@ ProMatch ships the following third-party components. Each keeps its own licence.
 | MediaPipe Face Mesh landmark model (`face_landmark.tflite`) | `vendor/` | Apache License 2.0 | https://github.com/google-ai-edge/mediapipe |
 | Adobe CSInterface.js 10.0 | `vendor/CSInterface.js` | Adobe CEP licence (redistributable with CEP extensions) | https://github.com/Adobe-CEP/CEP-Resources |
 
-The ProMatch effect (`ProMatch.aex`) is built with the Adobe After Effects SDK and Premiere Pro
+The ProMatch effect (`ProMatch.aex` on Windows, `ProMatch.plugin` on macOS) is built with the Adobe After Effects SDK and Premiere Pro
 SDK. The SDKs themselves are not distributed (they stay in the gitignored `native/sdk/`).
 
 The full Apache License 2.0 text is at https://www.apache.org/licenses/LICENSE-2.0 and the MIT

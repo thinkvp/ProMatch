@@ -105,4 +105,4 @@ Working in this session, with you restarting Premiere at checkpoints.
 | 7. GPU path | done: CUDA verified in Premiere and Media Encoder (P10); OpenCL verified offline only |
 | **Total** | **about 2.5–3.5 working days** |
 
-A Mac build is extra (Xcode on a Mac, about a day). The C++ is written to be portable.
+The Mac build (universal `ProMatch.plugin`, Metal GPU path) is in [docs/MAC.md](../docs/MAC.md).

@@ -409,7 +409,7 @@ export class App {
       b.addEventListener('click', () => this.selectTab(b.dataset.tab!))
     }
 
-    // Test cases are files in %APPDATA%: Premiere only.
+    // Test cases are files in the data folder: Premiere only.
     ;($('#save-test-case') as HTMLButtonElement).hidden = !node.hasNode
     $('#save-test-case').addEventListener('click', () => this.saveTestCase())
 
@@ -557,8 +557,14 @@ export class App {
   }
 
   private bindKeys(): void {
+    // The shortcuts in tooltips say Ctrl; on macOS undo and redo are Cmd.
+    if (node.isMac) {
+      for (const el of document.querySelectorAll<HTMLElement>('#undo, #redo, #clear-points')) {
+        el.title = el.title.replace(/Ctrl\+/g, '⌘')
+      }
+    }
     document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
         const on = document.body.classList.toggle('dev-mode')
         try {
           localStorage.setItem(DEV_MODE_KEY, on ? '1' : '0')
@@ -571,7 +577,8 @@ export class App {
       }
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
-      if (e.ctrlKey && !e.altKey && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
+      // Ctrl on Windows, Cmd on macOS.
+      if ((node.isMac ? e.metaKey : e.ctrlKey) && !e.altKey && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
         if (e.key.toLowerCase() === 'y' || e.shiftKey) this.redo()
         else this.undo()
         e.preventDefault()
@@ -613,7 +620,26 @@ export class App {
       return
     }
     try {
-      const info = await host.connect()
+      // A panel left open reopens while Premiere is still starting, before
+      // ExtendScript has host.jsx and the project ready: PM_ping then fails
+      // for the first few seconds. Retry for about 20 s before saying so.
+      const waits = [500, 1000, 1500, 2000, 3000, 4000, 4000, 4000]
+      let info: Awaited<ReturnType<typeof host.connect>>
+      let tries = 0
+      for (;;) {
+        try {
+          info = await host.connect()
+          break
+        } catch (e) {
+          if (tries >= waits.length) throw e
+          if (tries === 0) {
+            status.textContent = 'Connecting…'
+            status.className = 'status warn'
+          }
+          await new Promise((r) => setTimeout(r, waits[tries++]))
+        }
+      }
+      if (tries) log(`Connected after waiting ${tries} time(s) for Premiere to finish starting.`)
       status.textContent = `${info.app} ${info.version}`
       status.title = `Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`
       status.className = 'status ok'
@@ -1545,7 +1571,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
 
   /**
    * Calibrations by sequence colour setup (working space and its switches),
-   * saved in %APPDATA%\ProMatch\calibration.json: measured once, then reused.
+   * saved in calibration.json in the data folder: measured once, then reused.
    */
   private calibrations(): Record<string, Calibration> {
     try {
@@ -1704,7 +1730,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
           `<p class="small">${names.join(', ')}. Press <b>Apply</b> again after more tuning; it updates in place.${calNote ? ` ${calNote}` : ''}</p>` +
           warnings.map((w) => `<p class="small">${w}</p>`).join('') +
           `<p class="small">LUT copy: <code>${escapeHtml(p)}</code><br><b>Multicam:</b> apply to the angle's clip inside the multicam <i>source</i> sequence, so every cut to that camera inherits it.</p>` +
-          '<div class="button-row"><button data-r="reveal">Show in Explorer</button><button data-r="copy">Copy path</button></div>',
+          `<div class="button-row"><button data-r="reveal">Show in ${node.fileManager}</button><button data-r="copy">Copy path</button></div>`,
         warnings.length ? 'warn' : 'ok',
       )
       this.renderProgress()
@@ -1725,7 +1751,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
         '<li>Lumetri Color ▸ <b>Basic Correction</b> ▸ <b>Input LUT</b> ▸ <b>Browse…</b>, then paste the path.</li>' +
         "<li><b>Multicam:</b> apply it to the angle's clip inside the multicam <i>source</i> sequence, so every cut to that camera inherits it.</li>" +
         '</ol>' +
-        '<div class="button-row"><button data-r="reveal">Show in Explorer</button><button data-r="copy">Copy path</button></div>',
+        `<div class="button-row"><button data-r="reveal">Show in ${node.fileManager}</button><button data-r="copy">Copy path</button></div>`,
       withProject ? 'ok' : 'warn',
     )
     $('#export-result').querySelector('[data-r="lumetri"]')?.addEventListener('click', () => this.addLumetri())
@@ -1869,7 +1895,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
   }
 
   /**
-   * Copy both frames and the points into %APPDATA%\ProMatch\eval\, where
+   * Copy both frames and the points into eval/ in the data folder, where
    * scripts/eval-options.ts and eval-grid.ts score settings on them. Every
    * camera pair and lighting set added makes the defaults more trustworthy.
    */
@@ -1966,7 +1992,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
   }
 
   /**
-   * The effect's Edit LUT writes %APPDATA%\ProMatch\edit-request.json with a
+   * The effect's Edit LUT writes edit-request.json in the data folder with a
    * match ID (and the helper extension opens this panel if it is closed).
    * Load that match, and mark the request handled. A request from the last
    * minute is honoured at start-up too: that is the helper opening the panel.
@@ -2020,9 +2046,9 @@ Captured in ${setupName(colour)} colour management` : ''}`
     const folder = await this.lutFolder()
     const dir = this.matchDir(folder.dir, id)
     if (!dir || !node.exists(node.join(dir, 'match.json'))) {
-      log(`Edit LUT: no saved match ${id}${name ? ` (${name})` : ''} in ${folder.dir}\\Matches.`, 'warn')
+      log(`Edit LUT: no saved match ${id}${name ? ` (${name})` : ''} in ${node.join(folder.dir, 'Matches')}.`, 'warn')
       this.showResult(
-        `<div class="er-title">Can't open ${escapeHtml(name || 'that LUT')}</div><p class="small">Its match isn't saved in <code>${escapeHtml(folder.dir)}\\Matches</code>. Matches are kept from Apply onwards: one applied before, or with another project, isn't there.</p>`,
+        `<div class="er-title">Can't open ${escapeHtml(name || 'that LUT')}</div><p class="small">Its match isn't saved in <code>${escapeHtml(node.join(folder.dir, 'Matches'))}</code>. Matches are kept from Apply onwards: one applied before, or with another project, isn't there.</p>`,
         'warn',
       )
       return

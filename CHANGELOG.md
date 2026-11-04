@@ -17,6 +17,11 @@ the update check compares it with the version the panel was built with.
   there is a newer one. Click the version at the bottom of the panel to check now.
 - Windows installer (`npm run package:win`): installs the panel and the ProMatch effect for all
   users, and stops if Premiere Pro or Media Encoder is open.
+- **macOS.** The panel and the ProMatch effect on Mac (Apple Silicon and Intel, macOS 11+): the
+  effect renders on Metal, or on the CPU, and the installer (`npm run package:mac`) is a `.pkg`.
+  Undo and redo are ⌘Z and ⌘⇧Z there.
+- A panel left open when Premiere quit no longer says "Host script failed" when Premiere
+  starts: it waits for Premiere to finish loading.
 
 ## 0.1.0
 

@@ -25,6 +25,16 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
   installer empties the panel folder before copying, because a file the signature doesn't list
   makes CEP refuse the panel.
 - **The effect:** see `native/PLAN.md` for the SDKs and toolchain.
+- **macOS** (on the Mac): the Command Line Tools (`xcode-select --install`), CMake, Node, and the
+  macOS AE and Premiere Pro SDKs in `native/sdk/` ([MAC.md](MAC.md)). ZXPSignCmd 4.1.3
+  `macOS/ZXPSignCmd` from the same Adobe repo, saved as `tools/ZXPSignCmd` (gitignored,
+  `chmod +x`). It's an unsigned Intel binary: it runs under Rosetta, and macOS asks once to allow
+  it (System Settings ▸ Privacy & Security). SHA-256 of the copy in use:
+  `bc773fae0b97416fc7a462e7dadcc00270428a9913480c9b78b5606ff1cfb095`. Copy `certs/` over from
+  the Windows machine so both platforms sign with the same certificate; `package:mac` won't
+  make a new one.
+- **No Apple Developer ID**, like Syncitol and Unphased: the effect carries an ad-hoc signature
+  and the `.pkg` isn't notarized, so users allow it once ([INSTALL.md](INSTALL.md#macos)).
 
 ## Each release
 
@@ -35,7 +45,7 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    npm run version:set 0.2.0
    ```
 
-3. Build and test the effect (`native/PLAN.md`), then run the checks:
+3. Build and test the effect (`native/PLAN.md`; on the Mac, [MAC.md](MAC.md)), then run the checks:
 
    ```bash
    npm test
@@ -50,8 +60,19 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    This writes `release/ProMatch-0.2.0-win-setup.exe`. A build without ZXPSignCmd is
    **unsigned** and switches on PlayerDebugMode on the user's machine; it says so loudly. Don't
    ship one.
+
+   On the Mac, from the same commit: build the effect (`cmake --build native/build`), then
+
+   ```bash
+   npm run package:mac
+   ```
+
+   This writes `release/ProMatch-0.2.0-mac.pkg`. Without ZXPSignCmd or `certs/` it writes
+   `ProMatch-0.2.0-mac-UNSIGNED.pkg` instead, which switches on PlayerDebugMode. Don't ship one.
 5. Install it on a clean machine (or a VM) with no dev junctions, and check: the panel opens,
-   Capture, Auto and Apply work, the effect renders, and the uninstaller removes both.
+   Capture, Auto and Apply work, the effect renders, and the uninstaller removes both. On the
+   Mac, download the `.pkg` from a draft release (so it is quarantined, as for users), allow it
+   as INSTALL.md says, and check the render bar is yellow.
 6. Commit, tag and push the source:
 
    ```bash
@@ -72,12 +93,24 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --title "ProMatch 0.2.0" --notes-file release-notes.md
    ```
 
+   Then add the Mac installer from the Mac:
+
+   ```bash
+   gh release upload v0.2.0 release/ProMatch-0.2.0-mac.pkg
+   ```
+
    The tag must be `v` + the version. Panels see it within a day, or at once when the version
    number at the bottom of the panel is clicked.
 
 ## Dev machine notes
 
-`npm run link` makes a per-user junction `%APPDATA%\Adobe\CEP\extensions\ProMatch`, and
+On the Mac, `npm run link` makes `~/Library/Application Support/Adobe/CEP/extensions/ProMatch`,
+and the effect is linked as `/Library/…/MediaCore/ProMatch.plugin` → `native/out/ProMatch.plugin`
+([MAC.md](MAC.md)). The `.pkg` replaces that link with a real copy, so before testing an
+installer, remove the user-folder link (or Premiere sees two panels), and afterwards put both
+links back; the commands are in [MAC.md](MAC.md#dev-install).
+
+On Windows, `npm run link` makes a per-user junction `%APPDATA%\Adobe\CEP\extensions\ProMatch`, and
 `native/PLAN.md` a junction `MediaCore\ProMatch` → `native\out`. With the installer also
 installed, Premiere sees two copies of the panel with the same ID. Remove the junction (or
 uninstall) before testing an installer build, and put it back afterwards.

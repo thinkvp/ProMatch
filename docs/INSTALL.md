@@ -49,4 +49,45 @@ ProMatch installed, with no LUT files to copy.
 
 ## macOS
 
-Not available yet.
+**Needs:** macOS 11 or later, on Apple Silicon or Intel, and Premiere Pro 2021 (15.0) or later.
+The effect renders on Metal when Premiere's renderer is GPU-accelerated, and on the CPU otherwise.
+
+1. Close Premiere Pro and Media Encoder.
+2. Download `ProMatch-<version>-mac.pkg` from the
+   [latest release](https://github.com/thinkvp/ProMatch/releases/latest).
+3. Open it. ProMatch isn't registered with Apple (that costs a yearly fee), so the first time
+   macOS says it can't check the installer for malicious software:
+   - **macOS 15 or later:** click **Done**, open **System Settings ▸ Privacy & Security**,
+     scroll to the message about ProMatch, click **Open Anyway** and confirm.
+   - **macOS 14 or earlier:** Control-click the `.pkg`, choose **Open**, then **Open** again.
+4. Follow the installer and enter your Mac's password when it asks: the effect goes in a folder
+   shared by all users.
+5. Start Premiere Pro and open **Window ▸ Extensions ▸ ProMatch**.
+
+The installer puts two things on the Mac:
+
+| What | Where |
+| --- | --- |
+| The panel | `/Library/Application Support/Adobe/CEP/extensions/ProMatch` |
+| The ProMatch effect | `/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/ProMatch.plugin` |
+
+Your sessions (`~/Library/Application Support/ProMatch`) and the LUTs saved beside your projects
+are not touched by installing, updating, or uninstalling.
+
+### Updating
+
+As on Windows: press **Download** on the panel's banner and run the new `.pkg` over the old one.
+
+### Uninstalling
+
+There's no uninstaller app on macOS. In Terminal:
+
+```bash
+sudo rm -rf "/Library/Application Support/Adobe/CEP/extensions/ProMatch" "/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/ProMatch.plugin" && sudo pkgutil --forget com.promatch.pkg
+```
+
+### If the panel doesn't appear
+
+The same checks as on Windows above. If the effect shows a red render bar instead of yellow,
+check **File ▸ Project Settings ▸ General ▸ Renderer** is *Mercury Playback Engine GPU
+Acceleration (Metal)*.

@@ -28,9 +28,23 @@ export function join(...parts: string[]): string {
   return need(path).join(...parts)
 }
 
-/** %APPDATA%\ProMatch — captures and the saved session. */
+/** Running on macOS (CEP's Node, or a browser on a Mac). */
+export const isMac =
+  typeof process !== 'undefined' && process.platform ? process.platform === 'darwin' : /Mac/.test(navigator.platform)
+
+/** The file manager's name, for "Show in …" buttons. */
+export const fileManager = isMac ? 'Finder' : 'Explorer'
+
+/**
+ * Captures and the saved session: %APPDATA%\ProMatch on Windows,
+ * ~/Library/Application Support/ProMatch on macOS. The native effect uses the
+ * same folder (lut_engine.cpp dataPath), and so does helper.html.
+ */
 export function dataDir(): string {
-  const base = process.env.APPDATA || join(need(os).homedir(), 'AppData', 'Roaming')
+  const home = need(os).homedir()
+  const base = isMac
+    ? join(home, 'Library', 'Application Support')
+    : process.env.APPDATA || join(home, 'AppData', 'Roaming')
   return ensureDir(join(base, 'ProMatch'))
 }
 
@@ -160,7 +174,8 @@ export function newestCube(dir: string): string | null {
 }
 
 export function reveal(p: string): void {
-  need(cp).exec(`explorer /select,"${p}"`)
+  if (isMac) need(cp).execFile('open', ['-R', p])
+  else need(cp).exec(`explorer /select,"${p}"`)
 }
 
 export function safeFileName(name: string): string {

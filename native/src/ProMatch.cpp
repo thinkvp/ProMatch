@@ -28,10 +28,13 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+#else
+#include "mac_ui.h"
 #endif
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -332,16 +335,10 @@ static void ShowLutName(PF_InData* in_data, PF_ParamDef* params[], const char* w
     }
 }
 
+// ---------------------------------------------------- platform: dialogs
+// Ask for a .cube in the project's ProMatch LUTs folder; empty if cancelled.
+// Alert: a message box over Premiere. (macOS: mac_ui.mm.)
 #ifdef _WIN32
-static std::string Utf8(const std::wstring& w) {
-    if (w.empty()) return std::string();
-    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
-    std::string s(size_t(n), ' ');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), &s[0], n, nullptr, nullptr);
-    return s;
-}
-
-// Ask for a .cube in the project's ProMatch LUTs folder. Empty if cancelled.
 static std::wstring PickCube(PF_InData* in_data) {
     HWND owner = nullptr;
     if (in_data->utils && in_data->utils->get_platform_data && PF_GET_PLATFORM_DATA(PF_PlatData_MAIN_WND, &owner) != PF_Err_NONE)
@@ -358,23 +355,41 @@ static std::wstring PickCube(PF_InData* in_data) {
     ofn.lpstrInitialDir = folder.empty() ? nullptr : folder.c_str();
     ofn.lpstrTitle = L"ProMatch: choose a LUT";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    pm::logLine("LUT button: dialog in \"%s\" (owner %p)", Utf8(folder).c_str(), (void*)owner);
+    pm::logLine("LUT button: dialog in \"%s\" (owner %p)", pm::toUtf8(folder).c_str(), (void*)owner);
     if (!GetOpenFileNameW(&ofn)) return std::wstring();
     return file;
 }
+
+static void Alert(const std::wstring& message, bool warning) {
+    MessageBoxW(GetForegroundWindow(), message.c_str(), L"ProMatch", warning ? MB_ICONWARNING : MB_ICONINFORMATION);
+}
+#else
+static std::wstring PickCube(PF_InData*) {
+    const std::wstring folder = pm::lutFolder();
+    pm::logLine("LUT button: dialog in \"%s\"", pm::toUtf8(folder).c_str());
+    return pm::fromUtf8(pm_mac::PickCube(pm::toUtf8(folder)));
+}
+
+static void Alert(const std::wstring& message, bool warning) {
+    pm_mac::Alert(pm::toUtf8(message), warning);
+}
 #endif
 
-#ifdef _WIN32
+static long long NowMs() {
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 // Edit LUT: ask the panel to reopen the match that made this LUT. The panel
 // (or, when it is closed, its helper, which opens it) watches this file.
 static void RequestEdit(PF_InData* in_data, PF_ParamDef* params[]) {
     std::shared_ptr<const pm::Lut3D> lut = CurrentLut(in_data, params);
     if (!lut || lut->id <= 0) {
         pm::logLine("Edit LUT: no match ID");
-        MessageBoxW(GetForegroundWindow(),
-                    L"This LUT wasn't made in the ProMatch panel (or was made before ProMatch kept its matches), so there "
-                    L"is no match to open. Make one in the panel and press Apply.",
-                    L"ProMatch", MB_ICONINFORMATION);
+        Alert(L"This LUT wasn't made in the ProMatch panel (or was made before ProMatch kept its matches), so there "
+              L"is no match to open. Make one in the panel and press Apply.",
+              false);
         return;
     }
     std::string name;
@@ -383,30 +398,25 @@ static void RequestEdit(PF_InData* in_data, PF_ParamDef* params[]) {
         name.push_back(c);
     }
     char json[600];
-    std::snprintf(json, sizeof(json), "{\"id\":%ld,\"name\":\"%s\",\"at\":%lld}\n", lut->id, name.c_str(),
-                  (long long)GetTickCount64());
-    FILE* f = _wfopen(pm::dataPath(L"edit-request.json").c_str(), L"wb");
+    std::snprintf(json, sizeof(json), "{\"id\":%ld,\"name\":\"%s\",\"at\":%lld}\n", lut->id, name.c_str(), NowMs());
+    FILE* f = pm::openFile(pm::dataPath(L"edit-request.json"), "wb");
     if (f) {
         std::fputs(json, f);
         std::fclose(f);
     }
     pm::logLine("Edit LUT: requested match %ld (%s)", lut->id, lut->name.c_str());
 }
-#endif
 
 // Change LUT: load the chosen .cube into the LUT parameter. Edit LUT: ask the
 // panel for the match.
 static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[],
                                const PF_UserChangedParamExtra* extra) {
     pm::logLine("USER_CHANGED_PARAM index %d", extra ? (int)extra->param_index : -1);
-#ifdef _WIN32
     if (extra && extra->param_index == PM_EDIT) {
         RequestEdit(in_data, params);
         return PF_Err_NONE;
     }
-#endif
     if (!extra || extra->param_index != PM_PICK) return PF_Err_NONE;
-#ifdef _WIN32
     const std::wstring path = PickCube(in_data);
     if (path.empty()) {
         pm::logLine("LUT button: cancelled");
@@ -414,7 +424,7 @@ static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_Para
     }
     std::string text, error;
     {
-        FILE* f = _wfopen(path.c_str(), L"rb");
+        FILE* f = pm::openFile(path, "rb");
         if (f) {
             char buf[1 << 16];
             size_t n;
@@ -424,14 +434,14 @@ static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_Para
     }
     pm::Lut3D cube;
     if (text.empty() || !pm::parseCube(text, cube, &error)) {
-        pm::logLine("LUT button: could not read %s: %s", Utf8(path).c_str(), error.c_str());
-        MessageBoxW(GetForegroundWindow(), (L"ProMatch could not read this LUT:\n" + path).c_str(), L"ProMatch", MB_ICONWARNING);
+        pm::logLine("LUT button: could not read %s: %s", pm::toUtf8(path).c_str(), error.c_str());
+        Alert(L"ProMatch could not read this LUT:\n" + path, true);
         return PF_Err_NONE;
     }
     for (int c = 0; c < 3; c++) {
         if (cube.domainMin[c] != 0.f || cube.domainMax[c] != 1.f) {
-            pm::logLine("LUT button: %s has a domain other than 0..1", Utf8(path).c_str());
-            MessageBoxW(GetForegroundWindow(), L"ProMatch only takes LUTs with a 0..1 domain.", L"ProMatch", MB_ICONWARNING);
+            pm::logLine("LUT button: %s has a domain other than 0..1", pm::toUtf8(path).c_str());
+            Alert(L"ProMatch only takes LUTs with a 0..1 domain.", true);
             return PF_Err_NONE;
         }
     }
@@ -443,7 +453,7 @@ static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_Para
     long id = 0;
     const size_t tag = text.find("# ProMatch match ");
     if (tag != std::string::npos) id = std::atol(text.c_str() + tag + 17);
-    const std::vector<uint8_t> bytes = pm::toUtf16(pm::toEmbeddedText(cube, id, Utf8(stem)));
+    const std::vector<uint8_t> bytes = pm::toUtf16(pm::toEmbeddedText(cube, id, pm::toUtf8(stem)));
 
     // Write the new text into the parameter's handle and say it changed.
     PF_Handle h = params[PM_LUT]->u.arb_d.value;
@@ -459,9 +469,8 @@ static PF_Err UserChangedParam(PF_InData* in_data, PF_OutData* out_data, PF_Para
     params[PM_LUT]->u.arb_d.value = h;
     params[PM_LUT]->uu.change_flags = PF_ChangeFlag_CHANGED_VALUE;
     out_data->out_flags |= PF_OutFlag_FORCE_RERENDER | PF_OutFlag_REFRESH_UI;
-    pm::logLine("LUT button: loaded %s (%d^3, %zu bytes)", Utf8(path).c_str(), cube.size, bytes.size());
+    pm::logLine("LUT button: loaded %s (%d^3, %zu bytes)", pm::toUtf8(path).c_str(), cube.size, bytes.size());
     ShowLutName(in_data, params, "picked");
-#endif
     return PF_Err_NONE;
 }
 

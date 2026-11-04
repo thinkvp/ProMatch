@@ -7,7 +7,8 @@
 <body>
     <!--
         Invisible, started with Premiere (CSXS/manifest.xml). The ProMatch
-        effect's Edit LUT button writes %APPDATA%\ProMatch\edit-request.json;
+        effect's Edit LUT button writes edit-request.json in ProMatch's data folder
+        (%APPDATA%\ProMatch, or ~/Library/Application Support/ProMatch on macOS);
         this opens the panel, which then loads the match (app.ts
         watchEditRequests). An open panel closes itself and marks the request
         "reopened"; this then opens it again, in front.
@@ -17,7 +18,15 @@
         (function () {
             var fs = require('fs')
             var path = require('path')
-            var file = path.join(process.env.APPDATA, 'ProMatch', 'edit-request.json')
+            // Same folder as the panel (node.ts dataDir) and the effect (dataPath).
+            var dir = process.platform === 'darwin'
+                ? path.join(require('os').homedir(), 'Library', 'Application Support', 'ProMatch')
+                : path.join(process.env.APPDATA, 'ProMatch')
+            var file = path.join(dir, 'edit-request.json')
+            // The panel may never have run on this computer yet.
+            try {
+                fs.mkdirSync(dir, { recursive: true })
+            } catch (e) {}
             var mtime = function () {
                 try {
                     return fs.statSync(file).mtimeMs
@@ -27,7 +36,7 @@
             }
             var seen = mtime()
             // Heartbeat: the panel only closes itself for a reopen while this is fresh.
-            var alive = path.join(process.env.APPDATA, 'ProMatch', 'helper-alive')
+            var alive = path.join(dir, 'helper-alive')
             var beat = function () {
                 try {
                     fs.writeFileSync(alive, String(Date.now()))

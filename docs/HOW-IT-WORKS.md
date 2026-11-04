@@ -70,8 +70,9 @@ points; set `EVAL_SESSION` to score a saved point set instead.
 
 ## Checking the defaults
 
-**Save as test case** (Points tab, in Premiere; shown in Developer mode, **Ctrl+Shift+D**) copies both frames and your own points into
-`%APPDATA%\ProMatch\eval\`. Two scripts score settings on every saved case, always on points
+**Save as test case** (Points tab, in Premiere; shown in Developer mode, **Ctrl+Shift+D**, **⌘⇧D** on a Mac) copies both frames and your own points into
+`eval/` in ProMatch's data folder (`%APPDATA%\ProMatch` on Windows,
+`~/Library/Application Support/ProMatch` on a Mac). Two scripts score settings on every saved case, always on points
 the fit never saw. They use two kinds of point: your own, each left out in turn, and a few
 hundred same-spot pairs that feature matching finds away from them.
 - `npx tsx scripts/eval-options.ts` changes one setting at a time. For each it gives the error

@@ -2,9 +2,12 @@
 // kernel, loaded at runtime from nvcuda.dll / OpenCL.dll (both ship with the
 // GPU driver), so neither toolkit's headers or import libraries are needed.
 // Used by the GPU filter (ProMatch_GPU.cpp) and the GPU test (test/gputest.cpp).
+// Windows only; macOS uses Metal (metal_lut.h).
 #pragma once
 
 #include <windows.h>
+
+#include "gpu_args.h"
 
 #include <cstddef>
 #include <mutex>
@@ -139,14 +142,6 @@ inline const OpenClApi& OpenCl() {
     });
     return api;
 }
-
-// The kernel's arguments, in order (see kernels/ProMatchLut.cu / .cl).
-struct LutKernelArgs {
-    int srcPitch, dstPitch, is16f, width, height, size;
-    float dmin[3], dmax[3], amount;
-    // Calibration pattern: grid size n (0 = apply the LUT) and its layout.
-    int probe = 0, probeCols = 1, probeRows = 1;
-};
 
 // Set the OpenCL kernel's arguments.
 inline void SetClArgs(const OpenClApi& cl, cl_kernel k, cl_mem src, cl_mem dst, cl_mem lut, const LutKernelArgs& a) {

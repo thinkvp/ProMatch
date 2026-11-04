@@ -164,7 +164,7 @@
                         <span></span><span>Source</span><span>Target</span><span>Result</span><span class="de-col" title="After = tested: how close the match gets at each point when fitted without it">ΔE before → tested</span><span></span>
                     </div>
                     <ol id="points" class="points"></ol>
-                    <div class="points-foot"><button id="save-test-case" class="link dev-inline" title="Keep these frames and points for checking ProMatch's defaults (scripts/eval-grid.ts). Saved to %APPDATA%\ProMatch\eval\">Save as test case</button><span class="bar-spacer"></span><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
+                    <div class="points-foot"><button id="save-test-case" class="link dev-inline" title="Keep these frames and points for checking ProMatch's defaults (scripts/eval-grid.ts). Saved to eval in ProMatch's data folder.">Save as test case</button><span class="bar-spacer"></span><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
                 </section>
 
                 <section class="tab-panel" data-panel="settings" role="tabpanel" hidden>
@@ -181,7 +181,7 @@
 
                 <details class="card dev" id="dev-card">
                     <summary><h2>Developer</h2><span class="count">Ctrl+Shift+D hides</span></summary>
-                    <p class="small">API spikes — record results in <code>spikes/SPIKES.md</code>. Select one clip in the Timeline first. Dumps are saved to <code>%APPDATA%\ProMatch\spikes\</code>.</p>
+                    <p class="small">API spikes — record results in <code>spikes/SPIKES.md</code>. Select one clip in the Timeline first. Dumps are saved to <code>spikes</code> in ProMatch's data folder (<code>%APPDATA%\ProMatch</code>, or <code>~/Library/Application Support/ProMatch</code> on a Mac).</p>
                     <div class="controls">
                         <label class="row" title="Lumetri parameter display names, comma-separated; #N targets parameter index N (see a dump)">
                             <span>Params to set</span>

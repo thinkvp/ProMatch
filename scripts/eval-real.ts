@@ -25,9 +25,10 @@ import { type MatchModel, type PairInput, applyModel, fitMatch } from '../src/co
 import { sampleDisc } from '../src/core/sample.ts'
 import { encodePng, readPng } from './png.ts'
 import { pointRadius } from './session.ts'
+import { dataDir } from './data-dir.ts'
 
 const cv = await readyCv(createRequire(import.meta.url)('@techstark/opencv-js'))
-const dir = join(process.env.APPDATA!, 'ProMatch')
+const dir = dataDir
 // EVAL_SESSION=<file> scores a saved point set instead of the live session.
 const s = JSON.parse(readFileSync(process.env.EVAL_SESSION ?? join(dir, 'session.json'), 'utf8'))
 const src = readPng(s.frames.source.path)

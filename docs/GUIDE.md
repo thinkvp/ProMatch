@@ -51,15 +51,15 @@ faded markers). It is left out of the match but still measured against it, so it
 how close the match gets at that spot *without* it. Click again to switch it back on.
 
 **New frames:** capturing (or opening) a new source or target clears the points, since they
-belonged to the old frame. **Ctrl+Z** brings them back.
+belonged to the old frame. **Ctrl+Z** (**⌘Z** on a Mac) brings them back.
 
 **New match** (toolbar, click twice): starts over for another pair of cameras. It clears both
 frames and the points and puts every setting back to its default; the next Apply makes a new
 effect. Clips you already matched keep theirs, and its **Edit LUT** brings that match back.
 
 **Undo:** every point change (place, draw, move, resize, delete, switch off, Auto, Clear all)
-can be undone with **Ctrl+Z** or the ↶ button in the toolbar. **Ctrl+Shift+Z**, **Ctrl+Y** or
-↷ redoes.
+can be undone with **Ctrl+Z** (**⌘Z** on a Mac) or the ↶ button in the toolbar. **Ctrl+Shift+Z**,
+**Ctrl+Y** (**⌘⇧Z**, **⌘Y**) or ↷ redoes.
 
 **Scopes** (toolbar button, or **S**) open a strip under the frames, visible from either tab,
 so you can watch it while dragging Settings sliders. They always compare the source (blue)
@@ -110,7 +110,8 @@ cut to that camera inherits it, and your creative grade stays on the edit as usu
 Highlights always roll off into white instead of clipping, which only engages when the match
 brightens past white.
 
-The session (frames, points, settings) is saved to `%APPDATA%\ProMatch\session.json` and
+The session (frames, points, settings) is saved to `session.json` in ProMatch's data folder
+(`%APPDATA%\ProMatch` on Windows, `~/Library/Application Support/ProMatch` on a Mac) and
 restored when the panel reloads. Older sessions drop the model choice and switches they were
 saved with. Colour range and Smoothing values that were still at the old defaults move to the
 new ones.
@@ -121,10 +122,11 @@ A small native effect (C++, the After Effects effect API, which Premiere hosts) 
 applies the match with tetrahedral interpolation, 8-bit and 32-bit, blended by *Amount*. The LUT
 is stored **inside the effect**, so it is saved with the project and opens matched on another
 computer that has the effect installed, with nothing to copy. Each Apply replaces it, which
-re-renders. It renders on the GPU (CUDA; OpenCL too) when Premiere's renderer is GPU-accelerated,
-and on the CPU otherwise. On the test interview, the GPU render matches the panel's After view to
-0.25/255 (the CPU render to 0.44/255), and Media Encoder exports are pixel-identical to the Program
-Monitor (spikes P7–P10). The installer puts it in place ([INSTALL.md](INSTALL.md)); building it
+re-renders. It renders on the GPU (CUDA or OpenCL on Windows, Metal on a Mac) when Premiere's
+renderer is GPU-accelerated, and on the CPU otherwise. On the test interview, the GPU render matches
+the panel's After view to 0.25/255 (the CPU render to 0.44/255), and Media Encoder exports are
+pixel-identical to the Program Monitor (spikes P7–P10). On a Mac, both renders and a Media Encoder
+export match it to 1/255 ([MAC.md](MAC.md#tested-premiere-2652-m1-2026-11-04)). The installer puts it in place ([INSTALL.md](INSTALL.md)); building it
 from source: [DEVELOPMENT.md](DEVELOPMENT.md#the-native-effect).
 
 In Effect Controls it shows **Amount** and two rows:

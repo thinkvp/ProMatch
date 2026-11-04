@@ -5,10 +5,11 @@
 // Initialize() opts in or out per device: if this filter can't run on
 // Premiere's framework, Premiere renders the effect on the CPU instead.
 //
-// Frameworks: CUDA (kernel compiled to PTX at build time, loaded through the
-// driver API in nvcuda.dll) and OpenCL (kernel source built at runtime, via
-// OpenCL.dll). Both are loaded on demand, so the plug-in has no extra DLL
-// dependencies. Kernels: kernels/ProMatchLut.cu and .cl.
+// Frameworks, Windows: CUDA (kernel compiled to PTX at build time, loaded
+// through the driver API in nvcuda.dll) and OpenCL (kernel source built at
+// runtime, via OpenCL.dll). Both are loaded on demand, so the plug-in has no
+// extra DLL dependencies. macOS: Metal (kernel source compiled at runtime,
+// metal_lut.mm). Kernels: kernels/ProMatchLut.cu, .cl and .metal.
 
 // Same order as the SDK's GPU samples: PrGPUFilterModule.h needs the AE
 // support header (PF_TransitionSuite) first.
@@ -26,11 +27,15 @@
 #include <string>
 
 #include "ProMatch.h"
-#include "gpu_api.h"
 #include "lut_engine.h"
+#ifdef _WIN32
+#include "gpu_api.h"
 #include "ProMatchLut_cl.h"  // generated: kProMatchLutCl
 #if PM_HAS_CUDA
 #include "ProMatchLut_ptx.h"  // generated: kProMatchLutPtx
+#endif
+#else
+#include "metal_lut.h"
 #endif
 
 namespace {
@@ -46,6 +51,7 @@ struct Device {
     PrGPUDeviceFramework framework = PrGPUDeviceFramework_CUDA;
     bool ready = false;
     bool declined = false;  // this device can't run the filter (logged once)
+#ifdef _WIN32
     // CUDA
     CUmodule module = nullptr;
     CUfunction function = nullptr;
@@ -53,6 +59,11 @@ struct Device {
     // OpenCL
     cl_kernel kernel = nullptr;
     cl_mem clLut = nullptr;
+#else
+    // Metal (retained id<MTLComputePipelineState> and id<MTLBuffer>)
+    void* pipeline = nullptr;
+    void* metalLut = nullptr;
+#endif
     // The LUT on the device (the engine's cached object, so identity = content).
     std::shared_ptr<const pm::Lut3D> lut;
 };
@@ -83,6 +94,7 @@ bool PrepareDevice(Device& d, const PrGPUDeviceInfo& info) {
     if (d.declined) return false;  // already tried and logged why
     d.declined = true;
     d.framework = info.outDeviceFramework;
+#ifdef _WIN32
     if (info.outDeviceFramework == PrGPUDeviceFramework_CUDA) {
 #if PM_HAS_CUDA
         const CudaApi& cu = Cuda();
@@ -135,6 +147,19 @@ bool PrepareDevice(Device& d, const PrGPUDeviceInfo& info) {
         d.declined = false;
         return true;
     }
+#else
+    if (info.outDeviceFramework == PrGPUDeviceFramework_Metal) {
+        std::string error;
+        d.pipeline = pmmetal::CreatePipeline(info.outDeviceHandle, &error);
+        if (!d.pipeline) {
+            pm::logLine("GPU: Metal kernel failed: %s", error.c_str());
+            return false;
+        }
+        d.ready = true;
+        d.declined = false;
+        return true;
+    }
+#endif
     pm::logLine("GPU: framework %s not supported; CPU render", FrameworkName(info.outDeviceFramework));
     return false;
 }
@@ -143,6 +168,7 @@ bool PrepareDevice(Device& d, const PrGPUDeviceInfo& info) {
 bool UploadLut(Device& d, const PrGPUDeviceInfo& info, const std::shared_ptr<const pm::Lut3D>& lut) {
     if (d.lut == lut) return true;
     const size_t bytes = lut->data.size() * sizeof(float);
+#ifdef _WIN32
     if (d.framework == PrGPUDeviceFramework_CUDA) {
         const CudaApi& cu = Cuda();
         CUcontext ctx = (CUcontext)info.outContextHandle;
@@ -174,6 +200,16 @@ bool UploadLut(Device& d, const PrGPUDeviceInfo& info, const std::shared_ptr<con
             return false;
         }
     }
+#else
+    // Command buffers already encoded keep the old buffer alive themselves.
+    pmmetal::Release(d.metalLut);
+    d.metalLut = pmmetal::NewBuffer(info.outDeviceHandle, lut->data.data(), bytes);
+    if (!d.metalLut) {
+        pm::logLine("GPU: Metal LUT upload failed");
+        d.lut.reset();
+        return false;
+    }
+#endif
     d.lut = lut;
     return true;
 }
@@ -251,6 +287,7 @@ public:
         args.probe = probe;
         if (probe) pm::probeGrid(probe, width, height, &args.probeCols, &args.probeRows);
 
+#ifdef _WIN32
         if (d.framework == PrGPUDeviceFramework_CUDA) {
             const CudaApi& cu = Cuda();
             cu.CtxPushCurrent((CUcontext)mDeviceInfo.outContextHandle);
@@ -270,6 +307,15 @@ public:
                                                  nullptr, grid, block, 0, nullptr, nullptr);
         if (r != CL_SUCCESS) pm::logLine("GPU: OpenCL launch failed (%d)", r);
         return r == CL_SUCCESS ? suiteError_NoError : suiteError_Fail;
+#else
+        std::string error;
+        if (!pmmetal::Launch(mDeviceInfo.outCommandQueueHandle, d.pipeline, srcData, dstData, d.metalLut, args, false,
+                             &error)) {
+            pm::logLine("GPU: Metal launch failed: %s", error.c_str());
+            return suiteError_Fail;
+        }
+        return suiteError_NoError;
+#endif
     }
 
 private:

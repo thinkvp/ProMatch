@@ -6,16 +6,19 @@
  * Build the tool first: cmake --build native/build --config Release --target lutapply
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type Lut3D, applyLutToPixels, parseCube, toEmbeddedText } from '../src/core/lut.ts'
 import { readPng } from './png.ts'
+import { dataDir } from './data-dir.ts'
 
-const spikes = join(process.env.APPDATA ?? '', 'ProMatch', 'spikes')
+const spikes = join(dataDir, 'spikes')
 const framePath = process.argv[2] ?? join(spikes, 'lutasset-before-1792796174334.png')
 const cubePath = process.argv[3] ?? join(spikes, 'lutasset-test.cube')
-const tool = join(import.meta.dirname, '..', 'native', 'build', 'bin', 'Release', 'lutapply.exe')
+// MSVC puts it in bin/Release/lutapply.exe; single-config generators (macOS) in bin/lutapply.
+const bin = join(import.meta.dirname, '..', 'native', 'build', 'bin')
+const tool = [join(bin, 'Release', 'lutapply.exe'), join(bin, 'lutapply')].find((p) => existsSync(p)) ?? join(bin, 'lutapply')
 
 const img = readPng(framePath)
 const lut = parseCube(readFileSync(cubePath, 'utf8'))
