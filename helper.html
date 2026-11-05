@@ -51,10 +51,22 @@
                 try {
                     var r = JSON.parse(fs.readFileSync(file, 'utf8'))
                     if (r.handled) return
-                    // A reopen: give the closing panel a moment to go first.
-                    setTimeout(function () {
+                    // A reopen: give the closing panel a moment to go first. An
+                    // open while it is still closing does nothing, so ask again
+                    // until the new panel marks the request handled (about 5 s).
+                    var tries = 0
+                    var open = function () {
+                        var now
+                        try {
+                            now = JSON.parse(fs.readFileSync(file, 'utf8'))
+                        } catch (e) {
+                            now = r
+                        }
+                        if (now.handled || now.at !== r.at || tries++ >= 6) return
                         new CSInterface().requestOpenExtension('com.promatch.panel.main', '')
-                    }, r.reopened ? 400 : 0)
+                        setTimeout(open, 800)
+                    }
+                    setTimeout(open, r.reopened ? 400 : 0)
                 } catch (e) {
                     // Half-written or unreadable: the next change is seen again.
                 }

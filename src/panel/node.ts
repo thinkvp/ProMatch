@@ -7,6 +7,7 @@ type Fs = typeof import('fs')
 type Path = typeof import('path')
 type Os = typeof import('os')
 type ChildProcess = typeof import('child_process')
+type Zlib = typeof import('zlib')
 
 // Read it off globalThis: a bare `require` is rewritten by esbuild into a shim
 // that always exists, which would make every browser look like CEP.
@@ -18,6 +19,7 @@ const fs = req ? (req('fs') as Fs) : null
 const path = req ? (req('path') as Path) : null
 const os = req ? (req('os') as Os) : null
 const cp = req ? (req('child_process') as ChildProcess) : null
+const zlib = req ? (req('zlib') as Zlib) : null
 
 function need<T>(m: T | null): T {
   if (!m) throw new Error('File access needs Premiere (CEP Node is unavailable).')
@@ -193,4 +195,29 @@ export function remove(p: string): void {
   } catch {
     // Already gone, or locked: a stray capture is harmless.
   }
+}
+
+let gammaCache: { path: string; mtime: number; gamma: number } | null = null
+
+/** Premiere's Viewer Gamma when the project has never changed it. */
+export const DEFAULT_VIEWER_GAMMA = 2.4
+
+/**
+ * The project's Viewer Gamma (1.96, 2.2 or 2.4) as last saved: ExtendScript
+ * doesn't expose it, but the .prproj (gzipped XML) keeps it in
+ * ColorManagementSettings as "sdrGamma":220. Premiere only writes it once it
+ * differs from the default (a project showing 2.4 in Project Settings › Color
+ * has no sdrGamma), so a missing key means 2.4. Throws if the file can't be read.
+ */
+export async function projectViewerGamma(projectPath: string): Promise<number> {
+  const t = mtime(projectPath)
+  if (gammaCache && gammaCache.path === projectPath && gammaCache.mtime === t) return gammaCache.gamma
+  const f = need(fs)
+  const z = need(zlib)
+  let buf: Buffer = await f.promises.readFile(projectPath)
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = await new Promise<Buffer>((res, rej) => z.gunzip(buf, (e, out) => (e ? rej(e) : res(out))))
+  const m = /"sdrGamma"\s*:\s*(\d+)/.exec(buf.toString('utf8'))
+  const gamma = m ? Number(m[1]) / 100 : DEFAULT_VIEWER_GAMMA
+  gammaCache = { path: projectPath, mtime: t, gamma }
+  return gamma
 }

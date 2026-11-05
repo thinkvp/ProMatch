@@ -164,6 +164,9 @@ const SLIDERS: SliderSpec[] = [
 ]
 
 const DEV_MODE_KEY = 'promatch.devMode'
+const VIEWER_GAMMA_KEY = 'promatch.viewerGamma'
+/** What the panel's canvases show untouched: an sRGB display, about 2.2. */
+const PANEL_GAMMA = 2.2
 
 /** ΔE bands used everywhere a match error is shown. */
 function grade(de: number): 'good' | 'ok' | 'bad' {
@@ -275,6 +278,10 @@ export class App {
   private isoCanvases = { source: canvasOf(1, 1), targetBase: canvasOf(1, 1), targetMatched: canvasOf(1, 1) }
   private isolationPending = false
   private markersVisible = true
+  /** Viewer gamma picked in the bar; 'auto' follows the project. */
+  private gammaChoice: 'auto' | number = 'auto'
+  /** The project's Viewer Gamma as last saved (2.4 when never changed), or null if the file couldn't be read. */
+  private projectGamma: number | null = null
 
   async init(): Promise<void> {
     this.views = {
@@ -502,6 +509,26 @@ export class App {
     }
     document.body.classList.toggle('dev-mode', dev)
 
+    const gammaSel = $('#viewer-gamma') as HTMLSelectElement
+    try {
+      const g = localStorage.getItem(VIEWER_GAMMA_KEY)
+      if (g && [...gammaSel.options].some((o) => o.value === g)) gammaSel.value = g
+    } catch {
+      // Storage can be unavailable; Auto it is.
+    }
+    this.gammaChoice = gammaSel.value === 'auto' ? 'auto' : Number(gammaSel.value)
+    gammaSel.addEventListener('change', () => {
+      this.gammaChoice = gammaSel.value === 'auto' ? 'auto' : Number(gammaSel.value)
+      try {
+        localStorage.setItem(VIEWER_GAMMA_KEY, gammaSel.value)
+      } catch {
+        // Not persisted; the choice still holds for this session.
+      }
+      if (this.gammaChoice === 'auto') void this.refreshProjectGamma()
+      else this.applyViewerGamma()
+    })
+    this.applyViewerGamma()
+
     window.addEventListener('resize', () => this.applyLayout())
   }
 
@@ -646,6 +673,7 @@ export class App {
       log(`Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`)
       // The effect's Change LUT browses this project's LUT folder.
       void this.lutFolder().then((f) => node.writeText(node.join(node.dataDir(), 'lut-folder.txt'), f.dir))
+      void this.refreshProjectGamma()
     } catch (e) {
       status.textContent = 'Host script failed'
       status.title = 'jsx/host.jsx did not load — open the Log'
@@ -685,7 +713,12 @@ export class App {
     sctx.drawImage(img, 0, 0, sw, sh)
 
     const prev = this.frames[role]
-    if (!this.restoring) this.matchId = null
+    if (!this.restoring) {
+      // A new frame is a new match: the last Apply (its tick and result card) was the old one's.
+      this.matchId = null
+      this.lastExport = null
+      $('#export-result').hidden = true
+    }
     this.frames[role] = { label, path, width: w, height: h, pixels, full, small: sctx.getImageData(0, 0, sw, sh), colour, clip }
     if (prev && (prev.width !== w || prev.height !== h)) {
       // Different frame size: rescale this side's points so they stay on the same features.
@@ -766,6 +799,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
       const info = await host.captureFrame(base)
       // The colour setup it was captured under: Apply checks it hasn't changed since.
       const colour = await host.sequenceColour().catch(() => null)
+      void this.refreshProjectGamma()
       const file = await node.waitForFile([`${base}.png`, base])
       const who = info.clip ? info.clip.name : info.sequence
       const label = `${who} @ ${info.timecode}${info.clip?.multicam ? ' (multicam)' : ''}`
@@ -793,6 +827,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
     this.lutNameAuto = true
     ;($('#lut-name') as HTMLInputElement).value = this.lutName
     this.matchId = null
+    this.lastExport = null
     this.recalibrate = true
     this.pairs = []
     this.nextId = 1
@@ -1161,6 +1196,46 @@ Captured in ${setupName(colour)} colour management` : ''}`
       this.renderScopes()
     })()
     return 'pending'
+  }
+
+  /** Re-read the project's Viewer Gamma (cheap unless the .prproj was saved since). */
+  private async refreshProjectGamma(): Promise<void> {
+    if (!host.available || !node.hasNode) return
+    let g: number | null = null
+    try {
+      const path = (await host.projectInfo()).path
+      if (path) g = await node.projectViewerGamma(path)
+    } catch (e) {
+      log(`Could not read the project's Viewer Gamma (${(e as Error).message}).`, 'warn')
+    }
+    if (g !== this.projectGamma) {
+      this.projectGamma = g
+      if (this.gammaChoice === 'auto') {
+        log(
+          g
+            ? `Viewer Gamma ${g} (project as last saved): the frames are shown as the Program Monitor shows them.`
+            : `The project's Viewer Gamma is unknown: frames are shown at ${PANEL_GAMMA}. Pick one in the bar if the Program Monitor looks different.`,
+        )
+      }
+    }
+    this.applyViewerGamma()
+  }
+
+  /**
+   * Show the frames as Premiere's Viewer Gamma would: a Rec.709 picture meant
+   * for a gamma-g display, on the panel's ~2.2 one, is v^(g/2.2). Display
+   * only: scopes, readouts and the match all use the real values.
+   */
+  private applyViewerGamma(): void {
+    const auto = this.gammaChoice === 'auto'
+    const g = auto ? (this.projectGamma ?? PANEL_GAMMA) : (this.gammaChoice as number)
+    const exponent = g / PANEL_GAMMA
+    for (const f of document.querySelectorAll('#viewer-gamma-filter feComponentTransfer > *')) f.setAttribute('exponent', exponent.toFixed(4))
+    const filter = Math.abs(exponent - 1) < 1e-3 ? 'none' : 'url(#viewer-gamma-filter)'
+    document.documentElement.style.setProperty('--viewer-filter', filter)
+    for (const role of ROLES) this.views[role].setDisplayFilter(filter)
+    const sel = $('#viewer-gamma') as HTMLSelectElement
+    sel.options[0].textContent = this.projectGamma ? `γ Auto · ${this.projectGamma}` : 'γ Auto'
   }
 
   private setViewMode(mode: ViewMode): void {
@@ -2002,9 +2077,10 @@ Captured in ${setupName(colour)} colour management` : ''}`
     const file = node.join(node.dataDir(), 'edit-request.json')
     const opened = Date.now()
     let seen = Date.now() - node.mtime(file) < 60_000 ? 0 : node.mtime(file)
+    let closing = false
     setInterval(() => {
       const m = node.mtime(file)
-      if (!m || m <= seen) return
+      if (closing || !m || m <= seen) return
       seen = m
       let r: { id: number; name?: string; handled?: boolean; reopened?: boolean }
       try {
@@ -2022,6 +2098,11 @@ Captured in ${setupName(colour)} colour management` : ''}`
       if (!r.reopened && Date.now() - opened > 5000 && this.helperAlive()) {
         this.save()
         node.writeText(file, JSON.stringify({ ...r, reopened: true }))
+        // Closing can take longer than a tick: without this, the next tick read
+        // its own write as a request, marked it handled and stayed open, so
+        // the helper's reopen did nothing and the panel then closed for good.
+        closing = true
+        seen = node.mtime(file)
         host.closeSelf()
         return
       }

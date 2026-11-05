@@ -56,6 +56,12 @@
                     </button>
                     <button id="new-match" class="quiet new-btn" title="Start a new match: clears both frames and the points, and puts every setting back to its default. The next Apply makes a new effect; clips already matched keep theirs.">New match</button>
                     <span class="bar-spacer"></span>
+                    <select id="viewer-gamma" class="gamma-select" aria-label="Viewer gamma" title="Viewer Gamma: show the frames as Premiere's Program Monitor does (Project Settings › Color). Auto follows the project as last saved. Only changes how the frames look here: the match and the LUT are the same either way.">
+                        <option value="auto">γ Auto</option>
+                        <option value="1.96">γ 1.96</option>
+                        <option value="2.2">γ 2.2</option>
+                        <option value="2.4">γ 2.4</option>
+                    </select>
                     <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: hue map, luma and RGB parade, source vs target (S)">
                         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12"/><circle cx="6.4" cy="6.6" r="1.1" class="fill"/></svg>
                         Scopes
@@ -218,6 +224,17 @@
         </footer>
 
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/tiff" hidden>
+
+    <!-- Viewer Gamma for the frames and swatches; exponents set by the panel (applyViewerGamma). -->
+    <svg class="defs" aria-hidden="true">
+        <filter id="viewer-gamma-filter" color-interpolation-filters="sRGB">
+            <feComponentTransfer>
+                <feFuncR type="gamma" exponent="1"/>
+                <feFuncG type="gamma" exponent="1"/>
+                <feFuncB type="gamma" exponent="1"/>
+            </feComponentTransfer>
+        </filter>
+    </svg>
     </div>
 
     <script src="vendor/CSInterface.js"></script>

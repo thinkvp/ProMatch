@@ -57,7 +57,9 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    npm run package:win
    ```
 
-   This writes `release/ProMatch-0.2.0-win-setup.exe`. A build without ZXPSignCmd is
+   This writes `release/ProMatch-0.2.0-win-setup.exe`, and `release/release-notes.md` from the
+   version's changelog section. It stops if `native/out/ProMatch.aex` is older than anything in
+   `native/src` (rebuild it, or set `PROMATCH_ALLOW_STALE_AEX=1` if that's intended). A build without ZXPSignCmd is
    **unsigned** and switches on PlayerDebugMode on the user's machine; it says so loudly. Don't
    ship one.
 
@@ -90,7 +92,7 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
 7. Publish the release, with the changelog section as notes:
 
    ```bash
-   gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --title "ProMatch 0.2.0" --notes-file release-notes.md
+   gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --title "ProMatch 0.2.0" --notes-file release/release-notes.md
    ```
 
    Then add the Mac installer from the Mac:

@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 const ROOT = resolve('.')
@@ -50,8 +50,17 @@ const bundleVersion = /ExtensionBundleVersion="([^"]+)"/.exec(manifest)?.[1]
 if (bundleVersion !== version) fail(`manifest says ${bundleVersion}, package.json says ${version}. Run npm run version:set ${version}.`)
 
 if (!existsSync(AEX)) fail(`${AEX} is missing. Build the effect first (native/PLAN.md).`)
-const newestSource = Math.max(...['ProMatch.cpp', 'ProMatch_GPU.cpp', 'lut_engine.cpp'].map((f) => statSync(join(ROOT, 'native', 'src', f)).mtimeMs))
-if (statSync(AEX).mtimeMs < newestSource) console.warn('package-win: ProMatch.aex is older than native/src. Rebuild it if that is not intended.')
+// Every file under native/src (headers and GPU kernels too): a stale effect is easy to ship by mistake.
+const newestSource = Math.max(...readdirSync(join(ROOT, 'native', 'src'), { recursive: true }).map((f) => statSync(join(ROOT, 'native', 'src', f)).mtimeMs))
+if (statSync(AEX).mtimeMs < newestSource) {
+  if (!process.env.PROMATCH_ALLOW_STALE_AEX) fail('ProMatch.aex is older than native/src. Rebuild it (native/PLAN.md), or set PROMATCH_ALLOW_STALE_AEX=1.')
+  console.warn('package-win: ProMatch.aex is older than native/src (PROMATCH_ALLOW_STALE_AEX is set).')
+}
+
+// The changelog section for this version, for `gh release create --notes-file`.
+const changelog = readFileSync('CHANGELOG.md', 'utf8')
+const section = new RegExp(`^## ${version.replace(/\./g, '\\.')}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm').exec(changelog)?.[1].trim()
+if (!section) console.warn(`package-win: CHANGELOG.md has no "## ${version}" section, so no release notes. Rename Unreleased first (docs/RELEASING.md).`)
 
 run(process.execPath, ['esbuild.mjs'])
 
@@ -121,4 +130,6 @@ run(iscc, [
   '/Qp',
   join(ROOT, 'installer', 'windows', 'ProMatch.iss'),
 ])
+if (section) writeFileSync(join(ROOT, 'release', 'release-notes.md'), section + '\n')
 console.log(`\nrelease/ProMatch-${version}-win-setup.exe (${signed ? 'signed panel' : 'UNSIGNED panel'})`)
+if (section) console.log('release/release-notes.md')
