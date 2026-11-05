@@ -64,11 +64,22 @@ jobs:
           fi
 
       - name: Adobe SDKs (private repo)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PROMATCH_SDK_REPO }}
-          token: ${{ secrets.PROMATCH_SDK_TOKEN }}
-          path: native/sdk
+        env:
+          SDK_TOKEN: ${{ secrets.PROMATCH_SDK_TOKEN }}
+        run: |
+          # Pasted on Windows, the token may carry a line ending or spaces: strip them.
+          token=$(printf '%s' "$SDK_TOKEN" | tr -d '\r\n\t ')
+          [ -n "$token" ] || { echo "::error::Secret PROMATCH_SDK_TOKEN is empty."; exit 1; }
+          # Its shape only (GitHub's public prefixes and the length), never the value.
+          case "$token" in
+            github_pat_*) kind="fine-grained token" ;;
+            ghp_*) kind="classic token" ;;
+            *) kind="not a GitHub token (no github_pat_ or ghp_ prefix)" ;;
+          esac
+          echo "PROMATCH_SDK_TOKEN: $kind, ${#token} characters"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')" \
+            clone --depth 1 "https://github.com/$PROMATCH_SDK_REPO.git" native/sdk \
+            || { echo "::error::Could not clone $PROMATCH_SDK_REPO: the token is wrong, expired, or lacks Contents: Read on it."; exit 1; }
 
       - name: Check the SDKs are there
         run: |
