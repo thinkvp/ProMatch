@@ -3,7 +3,7 @@
 Versions follow `major.minor.patch`. The release tag is `v` + the version (for example `v0.2.0`);
 the update check compares it with the version the panel was built with.
 
-## Unreleased
+## 0.2.0
 
 - Captures are of one camera as shot: the selected clip under the playhead (else the top one),
   with the tracks above it hidden and its ProMatch effects at 0% just for the capture. No more

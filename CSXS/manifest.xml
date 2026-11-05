@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="11.0" ExtensionBundleId="com.promatch.panel"
-    ExtensionBundleVersion="0.1.0" ExtensionBundleName="ProMatch"
+    ExtensionBundleVersion="0.2.0" ExtensionBundleName="ProMatch"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <ExtensionList>
-        <Extension Id="com.promatch.panel.main" Version="0.1.0" />
-        <Extension Id="com.promatch.panel.helper" Version="0.1.0" />
+        <Extension Id="com.promatch.panel.main" Version="0.2.0" />
+        <Extension Id="com.promatch.panel.helper" Version="0.2.0" />
     </ExtensionList>
     <ExecutionEnvironment>
         <HostList>
