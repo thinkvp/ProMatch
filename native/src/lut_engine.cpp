@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <ctime>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -473,6 +474,82 @@ static const wchar_t kSep = L'\\';
 static const wchar_t kSep = L'/';
 #endif
 
+std::string toUtf8(const std::wstring& w) {
+    std::string s;
+#ifdef _WIN32
+    if (w.empty()) return s;
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
+    s.assign(size_t(n), ' ');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), &s[0], n, nullptr, nullptr);
+#else
+    for (wchar_t wc : w) {
+        const uint32_t c = uint32_t(wc);
+        if (c < 0x80) {
+            s.push_back(char(c));
+        } else if (c < 0x800) {
+            s.push_back(char(0xC0 | (c >> 6)));
+            s.push_back(char(0x80 | (c & 0x3F)));
+        } else if (c < 0x10000) {
+            s.push_back(char(0xE0 | (c >> 12)));
+            s.push_back(char(0x80 | ((c >> 6) & 0x3F)));
+            s.push_back(char(0x80 | (c & 0x3F)));
+        } else {
+            s.push_back(char(0xF0 | (c >> 18)));
+            s.push_back(char(0x80 | ((c >> 12) & 0x3F)));
+            s.push_back(char(0x80 | ((c >> 6) & 0x3F)));
+            s.push_back(char(0x80 | (c & 0x3F)));
+        }
+    }
+#endif
+    return s;
+}
+
+std::wstring fromUtf8(const std::string& s) {
+    std::wstring w;
+#ifdef _WIN32
+    if (s.empty()) return w;
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
+    w.assign(size_t(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), &w[0], n);
+#else
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char b = (unsigned char)s[i];
+        int extra = b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : b >= 0xC0 ? 1 : 0;
+        uint32_t c = extra == 3 ? (b & 0x07) : extra == 2 ? (b & 0x0F) : extra == 1 ? (b & 0x1F) : b;
+        if (i + size_t(extra) >= s.size()) break;  // truncated sequence
+        for (int k = 1; k <= extra; k++) c = (c << 6) | ((unsigned char)s[i + k] & 0x3F);
+        w.push_back(wchar_t(c));
+        i += size_t(extra) + 1;
+    }
+#endif
+    return w;
+}
+
+FILE* openFile(const std::wstring& path, const char* mode) {
+#ifdef _WIN32
+    const std::wstring wmode(mode, mode + std::strlen(mode));
+    return _wfopen(path.c_str(), wmode.c_str());
+#else
+    return std::fopen(toUtf8(path).c_str(), mode);
+#endif
+}
+
+bool fileExists(const std::wstring& path) {
+#ifdef _WIN32
+    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat st;
+    return stat(toUtf8(path).c_str(), &st) == 0;
+#endif
+}
+
+#ifndef _WIN32
+static std::wstring homeDir() {
+    const char* home = std::getenv("HOME");
+    return fromUtf8(home ? home : "");
+}
+#endif
+
 std::wstring dataPath(const std::wstring& rel) {
     std::wstring base;
 #ifdef _WIN32
@@ -480,16 +557,24 @@ std::wstring dataPath(const std::wstring& rel) {
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &roaming))) base = roaming;
     CoTaskMemFree(roaming);
 #else
-    const char* home = std::getenv("HOME");
-    std::string p = std::string(home ? home : "") + "/Library/Application Support";
-    base.assign(p.begin(), p.end());
+    base = homeDir() + L"/Library/Application Support";
 #endif
     return base + kSep + L"ProMatch" + kSep + rel;
 }
 
-std::wstring lutFolder() {
+// Create the data folder (its parent always exists on both platforms).
+static void makeDataDir() {
+    std::wstring dir = dataPath(L"");
+    if (!dir.empty()) dir.pop_back();  // the trailing separator
 #ifdef _WIN32
-    FILE* f = _wfopen(dataPath(L"lut-folder.txt").c_str(), L"rb");
+    CreateDirectoryW(dir.c_str(), nullptr);
+#else
+    mkdir(toUtf8(dir).c_str(), 0755);
+#endif
+}
+
+std::wstring lutFolder() {
+    FILE* f = openFile(dataPath(L"lut-folder.txt"), "rb");
     if (f) {
         char buf[2048] = {};
         const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
@@ -497,19 +582,19 @@ std::wstring lutFolder() {
         std::string utf8(buf, n);
         while (!utf8.empty() && (utf8.back() == '\n' || utf8.back() == '\r' || utf8.back() == ' ')) utf8.pop_back();
         if (!utf8.empty()) {
-            const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), nullptr, 0);
-            std::wstring w(size_t(len), L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, utf8.data(), int(utf8.size()), &w[0], len);
-            if (GetFileAttributesW(w.c_str()) != INVALID_FILE_ATTRIBUTES) return w;
+            const std::wstring w = fromUtf8(utf8);
+            if (fileExists(w)) return w;
         }
     }
+#ifdef _WIN32
     PWSTR docs = nullptr;
     std::wstring out;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) out = std::wstring(docs) + L"\\ProMatch LUTs";
     CoTaskMemFree(docs);
     return out;
 #else
-    return std::wstring();
+    const std::wstring home = homeDir();
+    return home.empty() ? std::wstring() : home + L"/Documents/ProMatch LUTs";
 #endif
 }
 
@@ -524,12 +609,12 @@ void logLine(const char* fmt, ...) {
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
     std::lock_guard<std::mutex> lock(mu);
-    const std::wstring path = dataPath(L"effect.log");
-#ifdef _WIN32
-    FILE* f = _wfopen(path.c_str(), L"a");
-#else
-    FILE* f = std::fopen(std::string(path.begin(), path.end()).c_str(), "a");
-#endif
+    FILE* f = openFile(dataPath(L"effect.log"), "a");
+    if (!f) {
+        // The panel creates the folder; the effect may load before it ever ran.
+        makeDataDir();
+        f = openFile(dataPath(L"effect.log"), "a");
+    }
     if (!f) return;
     std::fprintf(f, "%s  %s\n", stamp, msg);
     std::fclose(f);

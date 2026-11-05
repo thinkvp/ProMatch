@@ -14,9 +14,12 @@ npm run build
 npm run link
 ```
 
-`link` junctions this folder into `%APPDATA%\Adobe\CEP\extensions\ProMatch`. Restart Premiere,
+`link` junctions this folder into `%APPDATA%\Adobe\CEP\extensions\ProMatch` (on macOS it
+symlinks it into `~/Library/Application Support/Adobe/CEP/extensions/ProMatch` and turns on
+PlayerDebugMode; see [MAC.md](MAC.md)). Restart Premiere,
 then **Window ▸ Extensions ▸ ProMatch**. DevTools: <http://localhost:8094> while the panel is open.
-**Ctrl+Shift+D** shows the Developer section (API spikes); the setting is remembered.
+**Ctrl+Shift+D** (**⌘⇧D** on a Mac) shows the Developer section (API spikes); the setting is
+remembered.
 
 ## Trying it without Premiere
 
@@ -37,7 +40,7 @@ saved real sessions are described in [HOW-IT-WORKS.md](HOW-IT-WORKS.md#checking-
 ## The native effect
 
 C++ against the After Effects and Premiere Pro SDKs, in `native/`. Toolchain, SDKs and build
-steps: [native/PLAN.md](../native/PLAN.md).
+steps: [native/PLAN.md](../native/PLAN.md) (Windows), [MAC.md](MAC.md) (macOS).
 
 ## Premiere API notes
 

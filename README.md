@@ -26,12 +26,18 @@ darker and more orange and the shirt yellow; ProMatch's lands much closer to the
 
 ## Install
 
-Windows: download `ProMatch-<version>-win-setup.exe` from the
-[latest release](https://github.com/thinkvp/ProMatch/releases/latest), close Premiere, and run
-it. Then open **Window ▸ Extensions ▸ ProMatch**. Details: [docs/INSTALL.md](docs/INSTALL.md).
+From the [latest release](https://github.com/thinkvp/ProMatch/releases/latest), close Premiere,
+and run the installer:
 
-Needs Premiere Pro 2021 (15.0) or later on Windows 10 or 11. The panel checks for new versions
-once a day and shows a banner when one is out.
+- **Windows:** `ProMatch-<version>-win-setup.exe`
+- **macOS:** `ProMatch-<version>-mac.pkg`. It isn't registered with Apple, so macOS asks you to
+  allow it the first time ([how](docs/INSTALL.md#macos)).
+
+Then open **Window ▸ Extensions ▸ ProMatch**. Details: [docs/INSTALL.md](docs/INSTALL.md).
+
+Needs Premiere Pro 2021 (15.0) or later, on Windows 10 or 11, or macOS 11 or later (Apple
+Silicon or Intel). The panel checks for new versions once a day and shows a banner when one is
+out.
 
 ## Quick start
 
@@ -59,14 +65,14 @@ that made it.
   effect).
 - [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md): how the match, Auto and the LUT are computed,
   and how the defaults were tested.
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building from source;
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building from source ([docs/MAC.md](docs/MAC.md) for
+  the Mac build);
   [docs/RELEASING.md](docs/RELEASING.md): cutting a release.
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Roadmap
 
 - **UXP.** Move the panel from CEP to Adobe's UXP, which is replacing CEP in Premiere.
-- **macOS.** A Mac build of the panel and the effect, and a Mac installer.
 
 ## Licence
 

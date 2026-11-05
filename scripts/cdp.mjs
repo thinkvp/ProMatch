@@ -3,6 +3,7 @@
  * port (.debug: 8094) — lets spikes run without touching Premiere's UI.
  *   node scripts/cdp.mjs "<expression>"     (awaited; result printed as JSON)
  *   node scripts/cdp.mjs -f expr.js          (expression read from a file — no shell quoting)
+ * CDP_PORT=8095 targets the helper instead (it can open the panel).
  */
 import { readFileSync } from 'node:fs'
 
@@ -11,9 +12,10 @@ if (!expr) {
   console.error('usage: node scripts/cdp.mjs "<expression>"')
   process.exit(2)
 }
-const pages = await (await fetch('http://localhost:8094/json/list')).json()
+const port = process.env.CDP_PORT ?? '8094'
+const pages = await (await fetch(`http://localhost:${port}/json/list`)).json()
 const page = pages.find((p) => p.title === 'ProMatch') ?? pages[0]
-if (!page) throw new Error('ProMatch panel is not open (no page on :8094)')
+if (!page) throw new Error(`ProMatch panel is not open (no page on :${port})`)
 const ws = new WebSocket(page.webSocketDebuggerUrl)
 await new Promise((r, j) => {
   ws.onopen = r

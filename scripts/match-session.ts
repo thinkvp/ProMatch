@@ -1,5 +1,5 @@
 /**
- * Re-run the panel's saved session (%APPDATA%\ProMatch\session.json) offline:
+ * Re-run the panel's saved session (session.json in the data folder, scripts/data-dir.ts) offline:
  * same frames, same points, current engine. Prints per-point error and writes
  * a side-by-side "source | target after" PNG next to the captures.
  * Run: npx tsx scripts/match-session.ts [--no-contrast] [--global-only]
@@ -11,8 +11,9 @@ import { applyLutToPixels, bakeLut } from '../src/core/lut.ts'
 import { sampleDisc } from '../src/core/sample.ts'
 import { encodePng, readPng } from './png.ts'
 import { pointRadius } from './session.ts'
+import { dataDir } from './data-dir.ts'
 
-const dir = join(process.env.APPDATA!, 'ProMatch')
+const dir = dataDir
 const s = JSON.parse(readFileSync(join(dir, 'session.json'), 'utf8'))
 const opts: MatchOptions = { ...DEFAULT_OPTIONS, ...s.opts }
 if (process.argv.includes('--no-contrast')) opts.matchContrast = false

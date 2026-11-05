@@ -3,6 +3,8 @@
 // (native/test/lutapply.cpp).
 #pragma once
 
+#include <cstdio>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -93,15 +95,24 @@ bool parseEmbeddedText(const std::string& text, Lut3D& out, std::string* error =
 // nullptr for none, or malformed (then `error` says why).
 std::shared_ptr<const Lut3D> embeddedLut(const void* bytes, size_t len, std::string* error = nullptr);
 
-// %APPDATA%\ProMatch\<rel>
+// Paths are wide strings: UTF-16 on Windows, UTF-32 on macOS (wchar_t is
+// 32-bit there). These convert to and from UTF-8, and open such a path.
+std::string toUtf8(const std::wstring& w);
+std::wstring fromUtf8(const std::string& s);
+FILE* openFile(const std::wstring& path, const char* mode);
+bool fileExists(const std::wstring& path);
+
+// ProMatch's data folder + <rel>: %APPDATA%\ProMatch\<rel> on Windows,
+// ~/Library/Application Support/ProMatch/<rel> on macOS (the panel's
+// node.ts dataDir uses the same).
 std::wstring dataPath(const std::wstring& rel);
 
 // Where the panel saves this project's LUTs: the folder named in
-// %APPDATA%\ProMatch\lut-folder.txt (the panel writes it on Apply), else
-// Documents\ProMatch LUTs. Empty if neither is known.
+// <data>/lut-folder.txt (the panel writes it on Apply), else
+// Documents/ProMatch LUTs. Empty if neither is known.
 std::wstring lutFolder();
 
-// Append one line to %APPDATA%\ProMatch\effect.log (diagnostics; thread-safe).
+// Append one line to <data>/effect.log (diagnostics; thread-safe).
 void logLine(const char* fmt, ...);
 
 }  // namespace pm

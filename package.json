@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "link": "node scripts/link.mjs",
     "version:set": "node scripts/set-version.mjs",
-    "package:win": "node scripts/package-win.mjs"
+    "package:win": "node scripts/package-win.mjs",
+    "package:mac": "node scripts/package-mac.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

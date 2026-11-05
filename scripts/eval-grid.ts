@@ -15,10 +15,11 @@ import { DEFAULT_OPTIONS, type GlobalModel, type MatchOptions, type PairInput, a
 import { sampleDisc } from '../src/core/sample.ts'
 import { readPng } from './png.ts'
 import { pointRadius } from './session.ts'
+import { dataDir } from './data-dir.ts'
 
 const cv = await readyCv(createRequire(import.meta.url)('@techstark/opencv-js'))
-const dir = join(process.env.APPDATA!, 'ProMatch')
-// Every saved test case (the panel's "Save as test case"), or EVAL_FILES=a.json,b.json under %APPDATA%\ProMatch.
+const dir = dataDir
+// Every saved test case (the panel's "Save as test case"), or EVAL_FILES=a.json,b.json under the data folder (scripts/data-dir.ts).
 const files = process.env.EVAL_FILES?.split(',') ?? readdirSync(join(dir, 'eval')).filter((f) => f.endsWith('.json')).map((f) => `eval/${f}`)
 
 const sets = files.map((f) => {

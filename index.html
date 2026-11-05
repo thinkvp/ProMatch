@@ -56,6 +56,12 @@
                     </button>
                     <button id="new-match" class="quiet new-btn" title="Start a new match: clears both frames and the points, and puts every setting back to its default. The next Apply makes a new effect; clips already matched keep theirs.">New match</button>
                     <span class="bar-spacer"></span>
+                    <select id="viewer-gamma" class="gamma-select" aria-label="Viewer gamma" title="Viewer Gamma: show the frames as Premiere's Program Monitor does (Project Settings › Color). Auto follows the project as last saved. Only changes how the frames look here: the match and the LUT are the same either way.">
+                        <option value="auto">γ Auto</option>
+                        <option value="1.96">γ 1.96</option>
+                        <option value="2.2">γ 2.2</option>
+                        <option value="2.4">γ 2.4</option>
+                    </select>
                     <button id="toggle-scopes" class="quiet scopes-btn" aria-pressed="false" title="Show scopes: hue map, luma and RGB parade, source vs target (S)">
                         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12"/><circle cx="6.4" cy="6.6" r="1.1" class="fill"/></svg>
                         Scopes
@@ -164,7 +170,7 @@
                         <span></span><span>Source</span><span>Target</span><span>Result</span><span class="de-col" title="After = tested: how close the match gets at each point when fitted without it">ΔE before → tested</span><span></span>
                     </div>
                     <ol id="points" class="points"></ol>
-                    <div class="points-foot"><button id="save-test-case" class="link dev-inline" title="Keep these frames and points for checking ProMatch's defaults (scripts/eval-grid.ts). Saved to %APPDATA%\ProMatch\eval\">Save as test case</button><span class="bar-spacer"></span><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
+                    <div class="points-foot"><button id="save-test-case" class="link dev-inline" title="Keep these frames and points for checking ProMatch's defaults (scripts/eval-grid.ts). Saved to eval in ProMatch's data folder.">Save as test case</button><span class="bar-spacer"></span><button id="clear-auto" class="link" hidden>Remove Auto points</button><button id="clear-points" class="link" title="Remove every point (Ctrl+Z undoes it)">Clear all</button></div>
                 </section>
 
                 <section class="tab-panel" data-panel="settings" role="tabpanel" hidden>
@@ -181,7 +187,7 @@
 
                 <details class="card dev" id="dev-card">
                     <summary><h2>Developer</h2><span class="count">Ctrl+Shift+D hides</span></summary>
-                    <p class="small">API spikes — record results in <code>spikes/SPIKES.md</code>. Select one clip in the Timeline first. Dumps are saved to <code>%APPDATA%\ProMatch\spikes\</code>.</p>
+                    <p class="small">API spikes — record results in <code>spikes/SPIKES.md</code>. Select one clip in the Timeline first. Dumps are saved to <code>spikes</code> in ProMatch's data folder (<code>%APPDATA%\ProMatch</code>, or <code>~/Library/Application Support/ProMatch</code> on a Mac).</p>
                     <div class="controls">
                         <label class="row" title="Lumetri parameter display names, comma-separated; #N targets parameter index N (see a dump)">
                             <span>Params to set</span>
@@ -218,6 +224,17 @@
         </footer>
 
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/tiff" hidden>
+
+    <!-- Viewer Gamma for the frames and swatches; exponents set by the panel (applyViewerGamma). -->
+    <svg class="defs" aria-hidden="true">
+        <filter id="viewer-gamma-filter" color-interpolation-filters="sRGB">
+            <feComponentTransfer>
+                <feFuncR type="gamma" exponent="1"/>
+                <feFuncG type="gamma" exponent="1"/>
+                <feFuncB type="gamma" exponent="1"/>
+            </feComponentTransfer>
+        </filter>
+    </svg>
     </div>
 
     <script src="vendor/CSInterface.js"></script>

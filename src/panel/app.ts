@@ -164,6 +164,9 @@ const SLIDERS: SliderSpec[] = [
 ]
 
 const DEV_MODE_KEY = 'promatch.devMode'
+const VIEWER_GAMMA_KEY = 'promatch.viewerGamma'
+/** What the panel's canvases show untouched: an sRGB display, about 2.2. */
+const PANEL_GAMMA = 2.2
 
 /** ΔE bands used everywhere a match error is shown. */
 function grade(de: number): 'good' | 'ok' | 'bad' {
@@ -275,6 +278,10 @@ export class App {
   private isoCanvases = { source: canvasOf(1, 1), targetBase: canvasOf(1, 1), targetMatched: canvasOf(1, 1) }
   private isolationPending = false
   private markersVisible = true
+  /** Viewer gamma picked in the bar; 'auto' follows the project. */
+  private gammaChoice: 'auto' | number = 'auto'
+  /** The project's Viewer Gamma as last saved (2.4 when never changed), or null if the file couldn't be read. */
+  private projectGamma: number | null = null
 
   async init(): Promise<void> {
     this.views = {
@@ -409,7 +416,7 @@ export class App {
       b.addEventListener('click', () => this.selectTab(b.dataset.tab!))
     }
 
-    // Test cases are files in %APPDATA%: Premiere only.
+    // Test cases are files in the data folder: Premiere only.
     ;($('#save-test-case') as HTMLButtonElement).hidden = !node.hasNode
     $('#save-test-case').addEventListener('click', () => this.saveTestCase())
 
@@ -502,6 +509,26 @@ export class App {
     }
     document.body.classList.toggle('dev-mode', dev)
 
+    const gammaSel = $('#viewer-gamma') as HTMLSelectElement
+    try {
+      const g = localStorage.getItem(VIEWER_GAMMA_KEY)
+      if (g && [...gammaSel.options].some((o) => o.value === g)) gammaSel.value = g
+    } catch {
+      // Storage can be unavailable; Auto it is.
+    }
+    this.gammaChoice = gammaSel.value === 'auto' ? 'auto' : Number(gammaSel.value)
+    gammaSel.addEventListener('change', () => {
+      this.gammaChoice = gammaSel.value === 'auto' ? 'auto' : Number(gammaSel.value)
+      try {
+        localStorage.setItem(VIEWER_GAMMA_KEY, gammaSel.value)
+      } catch {
+        // Not persisted; the choice still holds for this session.
+      }
+      if (this.gammaChoice === 'auto') void this.refreshProjectGamma()
+      else this.applyViewerGamma()
+    })
+    this.applyViewerGamma()
+
     window.addEventListener('resize', () => this.applyLayout())
   }
 
@@ -557,8 +584,14 @@ export class App {
   }
 
   private bindKeys(): void {
+    // The shortcuts in tooltips say Ctrl; on macOS undo and redo are Cmd.
+    if (node.isMac) {
+      for (const el of document.querySelectorAll<HTMLElement>('#undo, #redo, #clear-points')) {
+        el.title = el.title.replace(/Ctrl\+/g, '⌘')
+      }
+    }
     document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
         const on = document.body.classList.toggle('dev-mode')
         try {
           localStorage.setItem(DEV_MODE_KEY, on ? '1' : '0')
@@ -571,7 +604,8 @@ export class App {
       }
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
-      if (e.ctrlKey && !e.altKey && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
+      // Ctrl on Windows, Cmd on macOS.
+      if ((node.isMac ? e.metaKey : e.ctrlKey) && !e.altKey && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
         if (e.key.toLowerCase() === 'y' || e.shiftKey) this.redo()
         else this.undo()
         e.preventDefault()
@@ -613,13 +647,33 @@ export class App {
       return
     }
     try {
-      const info = await host.connect()
+      // A panel left open reopens while Premiere is still starting, before
+      // ExtendScript has host.jsx and the project ready: PM_ping then fails
+      // for the first few seconds. Retry for about 20 s before saying so.
+      const waits = [500, 1000, 1500, 2000, 3000, 4000, 4000, 4000]
+      let info: Awaited<ReturnType<typeof host.connect>>
+      let tries = 0
+      for (;;) {
+        try {
+          info = await host.connect()
+          break
+        } catch (e) {
+          if (tries >= waits.length) throw e
+          if (tries === 0) {
+            status.textContent = 'Connecting…'
+            status.className = 'status warn'
+          }
+          await new Promise((r) => setTimeout(r, waits[tries++]))
+        }
+      }
+      if (tries) log(`Connected after waiting ${tries} time(s) for Premiere to finish starting.`)
       status.textContent = `${info.app} ${info.version}`
       status.title = `Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`
       status.className = 'status ok'
       log(`Connected to ${info.app} ${info.version}${info.sequence ? ` — sequence "${info.sequence}"` : ''}`)
       // The effect's Change LUT browses this project's LUT folder.
       void this.lutFolder().then((f) => node.writeText(node.join(node.dataDir(), 'lut-folder.txt'), f.dir))
+      void this.refreshProjectGamma()
     } catch (e) {
       status.textContent = 'Host script failed'
       status.title = 'jsx/host.jsx did not load — open the Log'
@@ -659,7 +713,12 @@ export class App {
     sctx.drawImage(img, 0, 0, sw, sh)
 
     const prev = this.frames[role]
-    if (!this.restoring) this.matchId = null
+    if (!this.restoring) {
+      // A new frame is a new match: the last Apply (its tick and result card) was the old one's.
+      this.matchId = null
+      this.lastExport = null
+      $('#export-result').hidden = true
+    }
     this.frames[role] = { label, path, width: w, height: h, pixels, full, small: sctx.getImageData(0, 0, sw, sh), colour, clip }
     if (prev && (prev.width !== w || prev.height !== h)) {
       // Different frame size: rescale this side's points so they stay on the same features.
@@ -740,6 +799,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
       const info = await host.captureFrame(base)
       // The colour setup it was captured under: Apply checks it hasn't changed since.
       const colour = await host.sequenceColour().catch(() => null)
+      void this.refreshProjectGamma()
       const file = await node.waitForFile([`${base}.png`, base])
       const who = info.clip ? info.clip.name : info.sequence
       const label = `${who} @ ${info.timecode}${info.clip?.multicam ? ' (multicam)' : ''}`
@@ -767,6 +827,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
     this.lutNameAuto = true
     ;($('#lut-name') as HTMLInputElement).value = this.lutName
     this.matchId = null
+    this.lastExport = null
     this.recalibrate = true
     this.pairs = []
     this.nextId = 1
@@ -1135,6 +1196,46 @@ Captured in ${setupName(colour)} colour management` : ''}`
       this.renderScopes()
     })()
     return 'pending'
+  }
+
+  /** Re-read the project's Viewer Gamma (cheap unless the .prproj was saved since). */
+  private async refreshProjectGamma(): Promise<void> {
+    if (!host.available || !node.hasNode) return
+    let g: number | null = null
+    try {
+      const path = (await host.projectInfo()).path
+      if (path) g = await node.projectViewerGamma(path)
+    } catch (e) {
+      log(`Could not read the project's Viewer Gamma (${(e as Error).message}).`, 'warn')
+    }
+    if (g !== this.projectGamma) {
+      this.projectGamma = g
+      if (this.gammaChoice === 'auto') {
+        log(
+          g
+            ? `Viewer Gamma ${g} (project as last saved): the frames are shown as the Program Monitor shows them.`
+            : `The project's Viewer Gamma is unknown: frames are shown at ${PANEL_GAMMA}. Pick one in the bar if the Program Monitor looks different.`,
+        )
+      }
+    }
+    this.applyViewerGamma()
+  }
+
+  /**
+   * Show the frames as Premiere's Viewer Gamma would: a Rec.709 picture meant
+   * for a gamma-g display, on the panel's ~2.2 one, is v^(g/2.2). Display
+   * only: scopes, readouts and the match all use the real values.
+   */
+  private applyViewerGamma(): void {
+    const auto = this.gammaChoice === 'auto'
+    const g = auto ? (this.projectGamma ?? PANEL_GAMMA) : (this.gammaChoice as number)
+    const exponent = g / PANEL_GAMMA
+    for (const f of document.querySelectorAll('#viewer-gamma-filter feComponentTransfer > *')) f.setAttribute('exponent', exponent.toFixed(4))
+    const filter = Math.abs(exponent - 1) < 1e-3 ? 'none' : 'url(#viewer-gamma-filter)'
+    document.documentElement.style.setProperty('--viewer-filter', filter)
+    for (const role of ROLES) this.views[role].setDisplayFilter(filter)
+    const sel = $('#viewer-gamma') as HTMLSelectElement
+    sel.options[0].textContent = this.projectGamma ? `γ Auto · ${this.projectGamma}` : 'γ Auto'
   }
 
   private setViewMode(mode: ViewMode): void {
@@ -1545,7 +1646,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
 
   /**
    * Calibrations by sequence colour setup (working space and its switches),
-   * saved in %APPDATA%\ProMatch\calibration.json: measured once, then reused.
+   * saved in calibration.json in the data folder: measured once, then reused.
    */
   private calibrations(): Record<string, Calibration> {
     try {
@@ -1704,7 +1805,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
           `<p class="small">${names.join(', ')}. Press <b>Apply</b> again after more tuning; it updates in place.${calNote ? ` ${calNote}` : ''}</p>` +
           warnings.map((w) => `<p class="small">${w}</p>`).join('') +
           `<p class="small">LUT copy: <code>${escapeHtml(p)}</code><br><b>Multicam:</b> apply to the angle's clip inside the multicam <i>source</i> sequence, so every cut to that camera inherits it.</p>` +
-          '<div class="button-row"><button data-r="reveal">Show in Explorer</button><button data-r="copy">Copy path</button></div>',
+          `<div class="button-row"><button data-r="reveal">Show in ${node.fileManager}</button><button data-r="copy">Copy path</button></div>`,
         warnings.length ? 'warn' : 'ok',
       )
       this.renderProgress()
@@ -1725,7 +1826,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
         '<li>Lumetri Color ▸ <b>Basic Correction</b> ▸ <b>Input LUT</b> ▸ <b>Browse…</b>, then paste the path.</li>' +
         "<li><b>Multicam:</b> apply it to the angle's clip inside the multicam <i>source</i> sequence, so every cut to that camera inherits it.</li>" +
         '</ol>' +
-        '<div class="button-row"><button data-r="reveal">Show in Explorer</button><button data-r="copy">Copy path</button></div>',
+        `<div class="button-row"><button data-r="reveal">Show in ${node.fileManager}</button><button data-r="copy">Copy path</button></div>`,
       withProject ? 'ok' : 'warn',
     )
     $('#export-result').querySelector('[data-r="lumetri"]')?.addEventListener('click', () => this.addLumetri())
@@ -1869,7 +1970,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
   }
 
   /**
-   * Copy both frames and the points into %APPDATA%\ProMatch\eval\, where
+   * Copy both frames and the points into eval/ in the data folder, where
    * scripts/eval-options.ts and eval-grid.ts score settings on them. Every
    * camera pair and lighting set added makes the defaults more trustworthy.
    */
@@ -1966,7 +2067,7 @@ Captured in ${setupName(colour)} colour management` : ''}`
   }
 
   /**
-   * The effect's Edit LUT writes %APPDATA%\ProMatch\edit-request.json with a
+   * The effect's Edit LUT writes edit-request.json in the data folder with a
    * match ID (and the helper extension opens this panel if it is closed).
    * Load that match, and mark the request handled. A request from the last
    * minute is honoured at start-up too: that is the helper opening the panel.
@@ -1976,9 +2077,10 @@ Captured in ${setupName(colour)} colour management` : ''}`
     const file = node.join(node.dataDir(), 'edit-request.json')
     const opened = Date.now()
     let seen = Date.now() - node.mtime(file) < 60_000 ? 0 : node.mtime(file)
+    let closing = false
     setInterval(() => {
       const m = node.mtime(file)
-      if (!m || m <= seen) return
+      if (closing || !m || m <= seen) return
       seen = m
       let r: { id: number; name?: string; handled?: boolean; reopened?: boolean }
       try {
@@ -1996,6 +2098,11 @@ Captured in ${setupName(colour)} colour management` : ''}`
       if (!r.reopened && Date.now() - opened > 5000 && this.helperAlive()) {
         this.save()
         node.writeText(file, JSON.stringify({ ...r, reopened: true }))
+        // Closing can take longer than a tick: without this, the next tick read
+        // its own write as a request, marked it handled and stayed open, so
+        // the helper's reopen did nothing and the panel then closed for good.
+        closing = true
+        seen = node.mtime(file)
         host.closeSelf()
         return
       }
@@ -2020,9 +2127,9 @@ Captured in ${setupName(colour)} colour management` : ''}`
     const folder = await this.lutFolder()
     const dir = this.matchDir(folder.dir, id)
     if (!dir || !node.exists(node.join(dir, 'match.json'))) {
-      log(`Edit LUT: no saved match ${id}${name ? ` (${name})` : ''} in ${folder.dir}\\Matches.`, 'warn')
+      log(`Edit LUT: no saved match ${id}${name ? ` (${name})` : ''} in ${node.join(folder.dir, 'Matches')}.`, 'warn')
       this.showResult(
-        `<div class="er-title">Can't open ${escapeHtml(name || 'that LUT')}</div><p class="small">Its match isn't saved in <code>${escapeHtml(folder.dir)}\\Matches</code>. Matches are kept from Apply onwards: one applied before, or with another project, isn't there.</p>`,
+        `<div class="er-title">Can't open ${escapeHtml(name || 'that LUT')}</div><p class="small">Its match isn't saved in <code>${escapeHtml(node.join(folder.dir, 'Matches'))}</code>. Matches are kept from Apply onwards: one applied before, or with another project, isn't there.</p>`,
         'warn',
       )
       return

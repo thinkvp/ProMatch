@@ -354,7 +354,7 @@ input.switch:checked::after { transform: translateX(12px); background: #fff; }
 .pill.muted { background: var(--surface-2); color: var(--text-2); }
 /* Auto-suggested pairs: dashed ring, like their markers on the frames. */
 .dot.auto { outline: 1px dashed var(--text-2); outline-offset: 2px; }
-.sw { height: 18px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.sw { height: 18px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); filter: var(--viewer-filter, none); }
 .de { justify-self: end; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pill { min-width: 34px; text-align: center; padding: 0 6px; border-radius: 8px; font-weight: 700; color: #111; }
 .pill.good { background: var(--good); }
@@ -443,6 +443,8 @@ body.dev-mode .dev-inline { display: inline-block; }
 
 /* ------------------------------------------------------------ scopes */
 
+svg.defs { position: absolute; width: 0; height: 0; }
+.gamma-select { font-size: 11px; }
 .scopes-btn { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; }
 .scopes-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.2; }
 .scopes-btn svg .fill { fill: var(--accent); stroke: none; }

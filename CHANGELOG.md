@@ -11,12 +11,22 @@ the update check compares it with the version the panel was built with.
 - **New match** in the toolbar starts over: frames, points and settings cleared, and the next
   Apply makes a new effect.
 - Split view: drag the divider to wipe between before and after.
+- Viewer Gamma (γ in the toolbar): the frames and swatches are shown as the Program Monitor shows
+  them at 1.96, 2.2 or 2.4. Auto reads it from the project as last saved. Display only: scopes,
+  readouts and the LUT are unchanged.
 - Zoomed in on a 4K frame, the After view is worked out at full resolution instead of enlarged
   from the 1280-pixel preview.
 - Update check: once a day the panel asks GitHub for the latest release and shows a banner when
   there is a newer one. Click the version at the bottom of the panel to check now.
 - Windows installer (`npm run package:win`): installs the panel and the ProMatch effect for all
   users, and stops if Premiere Pro or Media Encoder is open.
+- **macOS.** The panel and the ProMatch effect on Mac (Apple Silicon and Intel, macOS 11+): the
+  effect renders on Metal, or on the CPU, and the installer (`npm run package:mac`) is a `.pkg`.
+  Undo and redo are ⌘Z and ⌘⇧Z there.
+- A panel left open when Premiere quit no longer says "Host script failed" when Premiere
+  starts: it waits for Premiere to finish loading.
+- Edit LUT with the panel open behind Effect Controls brings it forward with the match, instead
+  of sometimes closing it and leaving it closed.
 
 ## 0.1.0
 

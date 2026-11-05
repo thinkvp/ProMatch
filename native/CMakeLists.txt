@@ -1,10 +1,21 @@
 # ProMatch native effect (AE-API, hosted by Premiere Pro) + engine test tool.
+# Windows:
 #   cmake -S native -B native/build -G "Visual Studio 17 2022" -A x64
 #   cmake --build native/build --config Release
-# The .aex lands in native/out/, which is junctioned into Premiere's
+# macOS (Command Line Tools are enough; universal arm64 + x86_64):
+#   cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+#   cmake --build native/build
+# The .aex / .plugin lands in native/out/, which is linked into Premiere's
 # MediaCore plug-in folder (see native/PLAN.md).
 cmake_minimum_required(VERSION 3.20)
-project(ProMatchNative CXX)
+if(APPLE)
+  # Before project(): Premiere 2021+ needs macOS 10.15+; arm64 needs 11.
+  set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0 CACHE STRING "Minimum macOS")
+  set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal build")
+  project(ProMatchNative CXX OBJCXX)
+else()
+  project(ProMatchNative CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +23,9 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 if(MSVC)
   add_compile_options(/W3 /O2 /fp:fast /utf-8)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+  # No -ffast-math: it lets clang drop the NaN/range guards the LUT code relies on.
+  add_compile_options(-O2 -Wall -Wno-unused-parameter)
 endif()
 
 set(PM_OUT ${CMAKE_CURRENT_SOURCE_DIR}/out)
@@ -41,14 +55,19 @@ endif()
 list(GET PM_AE_EFFECT_H 0 PM_FIRST)
 get_filename_component(PM_SDK_HEADERS ${PM_FIRST} DIRECTORY)
 get_filename_component(PM_SDK_ROOT ${PM_SDK_HEADERS} DIRECTORY)
-find_program(PM_PIPLTOOL PiPLtool PATHS ${PM_SDK_ROOT}/Resources NO_DEFAULT_PATH NO_CACHE REQUIRED)
 message(STATUS "AE SDK headers: ${PM_SDK_HEADERS}")
 if(EXISTS ${PM_PR_SDK}/Examples/Headers/PrSDKGPUFilter.h)
   message(STATUS "Premiere Pro SDK: ${PM_PR_SDK}")
 endif()
 
-# PiPL: preprocess the .r, convert with PiPLtool, preprocess again, then rc.
 set(PM_R ${CMAKE_CURRENT_SOURCE_DIR}/src/ProMatchPiPL.r)
+if(APPLE)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/mac.cmake)
+  return()
+endif()
+
+# PiPL: preprocess the .r, convert with PiPLtool, preprocess again, then rc.
+find_program(PM_PIPLTOOL PiPLtool PATHS ${PM_SDK_ROOT}/Resources NO_DEFAULT_PATH NO_CACHE REQUIRED)
 set(PM_RC ${CMAKE_CURRENT_BINARY_DIR}/ProMatchPiPL.rc)
 add_custom_command(
   OUTPUT ${PM_RC}

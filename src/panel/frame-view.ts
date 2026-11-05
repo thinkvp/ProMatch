@@ -12,6 +12,9 @@
  *
  * Split: drag the divider (or its grip) to wipe between before and after;
  * double-click it to centre it again.
+ *
+ * The picture (not the markers) is drawn through `displayFilter`, which
+ * shows it as Premiere's Viewer Gamma would; readouts stay the real values.
  */
 
 export interface Marker {
@@ -84,6 +87,8 @@ export class FrameView {
   /** Radius a click would place (image px): drawn in the loupe. */
   radius = 10
   private markersVisible = true
+  /** Canvas filter for the picture, e.g. 'url(#viewer-gamma-filter)'; 'none' draws it as is. */
+  private displayFilter = 'none'
 
   constructor(
     private wrap: HTMLElement,
@@ -182,6 +187,11 @@ export class FrameView {
 
   setMarkers(m: Marker[]): void {
     this.markers = m
+    this.render()
+  }
+
+  setDisplayFilter(filter: string): void {
+    this.displayFilter = filter
     this.render()
   }
 
@@ -451,6 +461,7 @@ export class FrameView {
     const sx1 = Math.min(this.imgW, this.vx + spanW)
     const sy1 = Math.min(this.imgH, this.vy + spanH)
     if (sx1 > sx0 && sy1 > sy0) {
+      c.filter = this.displayFilter
       c.drawImage(
         src,
         sx0 * k,
@@ -462,6 +473,7 @@ export class FrameView {
         ((sx1 - sx0) / spanW) * W,
         ((sy1 - sy0) / spanH) * H,
       )
+      c.filter = 'none'
     }
     if (clipX0 > 0) c.restore()
   }
@@ -603,7 +615,9 @@ export class FrameView {
     c.rect(lx, ly, size, size)
     c.clip()
     c.imageSmoothingEnabled = false
+    c.filter = this.displayFilter
     c.drawImage(src, (this.hover.x - span / 2) * sx, (this.hover.y - span / 2) * sx, span * sx, span * sx, lx, ly, size, size)
+    c.filter = 'none'
     const cx = lx + size / 2
     const cy = ly + size / 2
     c.strokeStyle = 'rgba(255,255,255,0.9)'
@@ -645,7 +659,9 @@ export class FrameView {
     c.fillStyle = 'rgba(0,0,0,0.72)'
     c.fillRect(lx, bottom - h, width, h)
     c.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`
+    c.filter = this.displayFilter
     c.fillRect(lx + 5 * dpr, bottom - h + 4 * dpr, 9 * dpr, 9 * dpr)
+    c.filter = 'none'
     c.fillStyle = '#e8e8e8'
     c.font = `${10 * dpr}px Consolas, monospace`
     c.textBaseline = 'middle'
