@@ -36,6 +36,55 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
 - **No Apple Developer ID**, like Syncitol and Unphased: the effect carries an ad-hoc signature
   and the `.pkg` isn't notarized, so users allow it once ([INSTALL.md](INSTALL.md#macos)).
 
+### Mac installer on GitHub Actions
+
+[`.github/workflows/mac-pkg.yml`](../.github/workflows/mac-pkg.yml) builds the `.pkg` on a
+GitHub-hosted Mac, so a release needs no Mac of our own. Publishing a release builds its tag and
+attaches `ProMatch-<version>-mac.pkg`. It can also be run by hand (Actions ▸ Mac installer ▸ Run
+workflow) on any branch; the `.pkg` is then a workflow artifact. It runs the typecheck and tests,
+builds the universal effect (and stops if the Metal path is missing), downloads ZXPSignCmd 4.1.3
+and checks its SHA-256, signs the panel with our certificate, and fails rather than build an
+UNSIGNED package. It can't run the effect, so a Mac is still needed for the install test.
+
+Set it up once, all from the Windows PC:
+
+1. **The SDKs, in a private repo** (done 2026-11-05: `thinkvp/promatch-mac-sdk`, the
+   `PROMATCH_SDK_REPO` in the workflow). Adobe's licence keeps them out of this public one. It
+   holds `aesdk/` and `prsdk/` as in `native/sdk/` on the PC: those downloads include the Mac
+   files (Xcode projects, `.metal`, `AE_General.r`). To update it, copy a new `native/sdk/` over
+   a clone (`git config core.longpaths true` first: some SDK paths are long), commit and push.
+2. **A read-only token for it:** on GitHub, Settings ▸ Developer settings ▸ Fine-grained tokens,
+   with repository access to `promatch-mac-sdk` only and **Contents: Read-only**. Save it as a
+   secret of this repo (it asks for the value):
+
+   ```bash
+   gh secret set PROMATCH_SDK_TOKEN --repo thinkvp/ProMatch
+   ```
+
+   Fine-grained tokens expire: renew it (same command) when the job says it can't check out
+   the SDKs.
+3. **The certificate and its password** (from `certs/`), in PowerShell in the repo folder:
+
+   ```powershell
+   gh secret set ZXP_CERT_P12 --repo thinkvp/ProMatch --body ([Convert]::ToBase64String([IO.File]::ReadAllBytes("certs\promatch.p12")))
+   ```
+
+   ```powershell
+   gh secret set ZXP_CERT_PASSWORD --repo thinkvp/ProMatch --body (Get-Content certs\promatch.p12.password -Raw).Trim()
+   ```
+
+4. **A trial run** from `main`, before the first release:
+
+   ```bash
+   gh workflow run mac-pkg.yml --repo thinkvp/ProMatch -f ref=main
+   ```
+
+   ```bash
+   gh run watch --repo thinkvp/ProMatch
+   ```
+
+   The `.pkg` is under the run's artifacts.
+
 ## Each release
 
 1. Update `CHANGELOG.md`: rename **Unreleased** to the new version.
@@ -63,7 +112,9 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    **unsigned** and switches on PlayerDebugMode on the user's machine; it says so loudly. Don't
    ship one.
 
-   On the Mac, from the same commit: build the effect (`cmake --build native/build`), then
+   The Mac `.pkg` is built by GitHub Actions when the release is published (step 7). To build
+   it on a Mac instead, from the same commit: build the effect (`cmake --build native/build`),
+   then
 
    ```bash
    npm run package:mac
@@ -95,11 +146,15 @@ signing in, so **the repo has to stay public**: GitHub answers 404 for a private
    gh release create v0.2.0 release/ProMatch-0.2.0-win-setup.exe --title "ProMatch 0.2.0" --notes-file release/release-notes.md
    ```
 
-   Then add the Mac installer from the Mac:
+   Publishing starts the **Mac installer** workflow, which attaches
+   `ProMatch-0.2.0-mac.pkg` to the release in about ten minutes:
 
    ```bash
-   gh release upload v0.2.0 release/ProMatch-0.2.0-mac.pkg
+   gh run watch --repo thinkvp/ProMatch
    ```
+
+   (A `.pkg` built on a Mac instead goes up with
+   `gh release upload v0.2.0 release/ProMatch-0.2.0-mac.pkg`.)
 
    The tag must be `v` + the version. Panels see it within a day, or at once when the version
    number at the bottom of the panel is clicked.

@@ -1,0 +1,133 @@
+# The macOS installer, built on a GitHub-hosted Mac: no Mac of our own needed.
+#
+# - Publishing a release (gh release create v0.2.0 ...) builds that tag and
+#   attaches ProMatch-<version>-mac.pkg to the release.
+# - Run it by hand (Actions > Mac installer > Run workflow) to build any branch
+#   or tag; the .pkg is kept as a workflow artifact, and attached to the release
+#   only when "upload" is ticked.
+#
+# One-time setup (docs/RELEASING.md, "Mac installer on GitHub Actions"):
+#   - a private repo with the macOS AE and Premiere Pro SDKs (Adobe's licence
+#     keeps them out of this public one), named in PROMATCH_SDK_REPO below;
+#   - secrets PROMATCH_SDK_TOKEN (read access to that repo), ZXP_CERT_P12
+#     (certs/promatch.p12, base64) and ZXP_CERT_PASSWORD.
+# Only a release or a manual run starts it, never a pull request, so the
+# secrets are never handed to code from a fork.
+name: Mac installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag or branch to build
+        default: main
+        required: true
+      upload:
+        description: Attach the .pkg to the release for this tag (ref must be a tag like v0.2.0)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # gh release upload
+
+concurrency:
+  group: mac-pkg-${{ github.event.release.tag_name || inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  PROMATCH_SDK_REPO: thinkvp/promatch-mac-sdk
+  # Adobe-CEP/CEP-Resources, ZXPSignCMD/4.1.3/macOS: the copy the Mac build was tested with.
+  ZXPSIGNCMD_URL: https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/master/ZXPSignCMD/4.1.3/macOS/ZXPSignCmd
+  ZXPSIGNCMD_SHA256: bc773fae0b97416fc7a462e7dadcc00270428a9913480c9b78b5606ff1cfb095
+
+jobs:
+  pkg:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      REF: ${{ github.event.release.tag_name || inputs.ref }}
+      UPLOAD: ${{ github.event_name == 'release' || inputs.upload }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+
+      - name: Version matches the tag
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [ "$UPLOAD" = "true" ] && [ "$REF" != "v$version" ]; then
+            echo "::error::Uploading to release $REF, but package.json says $version (the tag must be v$version)."
+            exit 1
+          fi
+
+      - name: Adobe SDKs (private repo)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROMATCH_SDK_REPO }}
+          token: ${{ secrets.PROMATCH_SDK_TOKEN }}
+          path: native/sdk
+
+      - name: Check the SDKs are there
+        run: |
+          find native/sdk/aesdk -name AE_Effect.h | grep -q . || { echo "::error::No AE_Effect.h under native/sdk/aesdk."; exit 1; }
+          [ -f native/sdk/prsdk/Examples/Headers/PrSDKGPUFilter.h ] || { echo "::error::No Premiere Pro SDK in native/sdk/prsdk: the effect would build without its Metal path."; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck and tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build the effect (universal, Metal)
+        run: |
+          cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release | tee cmake-configure.log
+          grep -q "GPU filter: Metal" cmake-configure.log || { echo "::error::CMake did not find the Metal GPU path."; exit 1; }
+          cmake --build native/build --parallel
+          lipo -archs native/out/ProMatch.plugin/Contents/MacOS/ProMatch
+
+      - name: ZXPSignCmd (Adobe, checked by SHA-256)
+        run: |
+          mkdir -p tools
+          curl -fsSL "$ZXPSIGNCMD_URL" -o tools/ZXPSignCmd
+          echo "$ZXPSIGNCMD_SHA256  tools/ZXPSignCmd" | shasum -a 256 -c -
+          chmod +x tools/ZXPSignCmd
+          # It's an Intel binary; Apple Silicon runners need Rosetta for it.
+          if [ "$(uname -m)" = "arm64" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+
+      - name: Package (signed panel)
+        env:
+          ZXP_CERT_P12: ${{ secrets.ZXP_CERT_P12 }}
+          ZXP_CERT_PASSWORD: ${{ secrets.ZXP_CERT_PASSWORD }}
+          PROMATCH_REQUIRE_SIGNED: '1'
+        run: |
+          [ -n "$ZXP_CERT_P12" ] && [ -n "$ZXP_CERT_PASSWORD" ] || { echo "::error::Secrets ZXP_CERT_P12 and ZXP_CERT_PASSWORD are needed to sign the panel."; exit 1; }
+          export ZXP_CERT="$RUNNER_TEMP/promatch.p12"
+          # Pasted on Windows, either secret may carry a line ending: strip them.
+          export ZXP_CERT_PASSWORD="$(printf '%s' "$ZXP_CERT_PASSWORD" | tr -d '\r\n')"
+          printf '%s' "$ZXP_CERT_P12" | tr -d '\r\n ' | base64 --decode > "$ZXP_CERT"
+          trap 'rm -f "$ZXP_CERT"' EXIT
+          npm run package:mac
+          ls -l release/*.pkg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProMatch-${{ env.VERSION }}-mac
+          path: release/ProMatch-${{ env.VERSION }}-mac.pkg
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.UPLOAD == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$REF" "release/ProMatch-$VERSION-mac.pkg" --clobber

@@ -11,6 +11,7 @@
  *    and the same certificate as the Windows build (certs/promatch.p12), so
  *    Premiere loads it without PlayerDebugMode. Unsigned, the package is named
  *    -UNSIGNED and turns PlayerDebugMode on instead (dev builds only).
+ *    PROMATCH_REQUIRE_SIGNED=1 (set by CI) makes that an error instead.
  * 4. pkgbuild + productbuild. No Apple Developer ID, like Syncitol and
  *    Unphased: the package is not notarized, so macOS asks once before opening
  *    it (docs/INSTALL.md). Files the Installer puts in place carry no
@@ -117,6 +118,8 @@ if (signCmd && existsSync(cert)) {
 } else {
   console.warn('package-mac: ZXPSignCmd not found (tools/ZXPSignCmd, docs/RELEASING.md). Building UNSIGNED.')
 }
+// CI (.github/workflows/mac-pkg.yml) sets this: a release must never fall back to unsigned.
+if (!signed && process.env.PROMATCH_REQUIRE_SIGNED) fail('PROMATCH_REQUIRE_SIGNED is set, but the panel could not be signed (see above).')
 if (!signed) console.warn('package-mac: the UNSIGNED package turns on PlayerDebugMode. Do not ship it.')
 
 // -------------------------------------------------------- install scripts

@@ -55,7 +55,10 @@ Premiere loads new effects and panels at start-up, so restart it after either.
 npm run package:mac
 ```
 
-writes `release/ProMatch-<version>-mac.pkg` ([RELEASING.md](RELEASING.md)). It installs the panel
+writes `release/ProMatch-<version>-mac.pkg` ([RELEASING.md](RELEASING.md)). Releases don't need
+a Mac for this: the **Mac installer** workflow (`.github/workflows/mac-pkg.yml`) builds and
+attaches the `.pkg` on a GitHub-hosted Mac ([RELEASING.md](RELEASING.md#mac-installer-on-github-actions)).
+It installs the panel
 to `/Library/Application Support/Adobe/CEP/extensions/ProMatch` and the effect to
 `/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/ProMatch.plugin`, empties
 both first (a symlink is removed, not followed), won't install while Premiere or Media Encoder
